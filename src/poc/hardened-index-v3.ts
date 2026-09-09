@@ -222,7 +222,7 @@ async function listOrders(startDate: string, endDate: string, maxOrders: number)
   const targetPage = await getPage();
   await requireAuthentication(targetPage);
 
-  let url = `https://www.${DOMAIN}/your-orders/orders?timeFilter=year-${year}&language=en_GB`;
+  let url: string | null = `https://www.${DOMAIN}/your-orders/orders?timeFilter=year-${year}&language=en_GB`;
   const matches: MinimalOrder[] = [];
   let pagesScanned = 0;
 
