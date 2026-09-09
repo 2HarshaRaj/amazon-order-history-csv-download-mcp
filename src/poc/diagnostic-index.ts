@@ -123,7 +123,7 @@ async function diagnoseOrderList(year: number) {
 
   const title = await targetPage.title().catch(() => "");
   const readyState = await targetPage
-    .evaluate(() => document.readyState)
+    .evaluate("document.readyState")
     .catch(() => "unknown");
   const bodyText = await targetPage
     .locator("body")
