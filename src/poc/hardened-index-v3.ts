@@ -48,7 +48,13 @@ const MONTHS: Record<string, number> = {
 
 function safeMoney(value: Money | undefined) {
   if (!value) return undefined;
-  return { amount: value.amount, currency: value.currency, formatted: value.formatted };
+  const formatted = new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: value.currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value.amount);
+  return { amount: value.amount, currency: value.currency, formatted };
 }
 
 function parseInputDate(value: string): number {
