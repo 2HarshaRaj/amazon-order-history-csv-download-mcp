@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "amazon-in-orders-hardened-poc": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["dist/poc/hardened-index.js"],
+      "cwd": ".",
+      "requestTimeout": 180000
+    }
+  }
+}
