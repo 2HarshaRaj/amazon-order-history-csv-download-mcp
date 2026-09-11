@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "path";
 
 import {
+  AuthenticationRequiredError,
   closeBrowser,
   extractOrderItems,
   listOrders,
@@ -50,6 +51,14 @@ export interface JsonExport {
   metadata: { windowStart: string; windowEnd: string; pagesScanned: number };
   orders: JsonOrder[];
 }
+
+interface ExportLifecycleDependencies {
+  run: (options: CliOptions) => Promise<void>;
+  close: () => Promise<void>;
+}
+
+const AUTH_REQUIRED_MESSAGE =
+  "Amazon.in login required. Complete sign-in/OTP in the visible dedicated Chromium window, then rerun the command. The browser has been left open.";
 
 function optionValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name);
@@ -252,16 +261,45 @@ export async function runExport(
   );
 }
 
-async function main(): Promise<void> {
+export async function runExportWithBrowserLifecycle(
+  options: CliOptions,
+  dependencies: ExportLifecycleDependencies = {
+    run: runExport,
+    close: closeBrowser,
+  },
+): Promise<void> {
+  let leaveBrowserOpen = false;
   try {
-    await runExport(parseCliOptions(process.argv.slice(2)));
+    await dependencies.run(options);
+  } catch (error) {
+    leaveBrowserOpen = error instanceof AuthenticationRequiredError;
+    throw error;
+  } finally {
+    if (!leaveBrowserOpen) await dependencies.close();
+  }
+}
+
+async function main(): Promise<void> {
+  let options: CliOptions;
+  try {
+    options = parseCliOptions(process.argv.slice(2));
   } catch (error) {
     console.error(
       error instanceof Error ? error.message : "Export failed unexpectedly.",
     );
     process.exitCode = 1;
-  } finally {
-    await closeBrowser();
+    return;
+  }
+
+  try {
+    await runExportWithBrowserLifecycle(options);
+  } catch (error) {
+    console.error(
+      error instanceof AuthenticationRequiredError
+        ? AUTH_REQUIRED_MESSAGE
+        : "Export failed without writing personal order data to the console. Close the browser if it remains open, then retry.",
+    );
+    process.exitCode = 1;
   }
 }
 

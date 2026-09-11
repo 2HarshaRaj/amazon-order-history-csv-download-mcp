@@ -163,9 +163,16 @@ async function isAuthenticated(targetPage: Page): Promise<boolean> {
   return signInControls === 0;
 }
 
+export class AuthenticationRequiredError extends Error {
+  constructor() {
+    super("Amazon.in login required. Complete sign-in in the visible dedicated Chromium window, then retry.");
+    this.name = "AuthenticationRequiredError";
+  }
+}
+
 async function requireAuthentication(targetPage: Page): Promise<void> {
   if (!(await isAuthenticated(targetPage))) {
-    throw new Error("Amazon.in login required. Complete sign-in in the visible dedicated Chromium window, then retry.");
+    throw new AuthenticationRequiredError();
   }
 }
 

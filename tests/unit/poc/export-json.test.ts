@@ -6,9 +6,11 @@ import { join } from "path";
 import {
   createExportDocument,
   parseCliOptions,
+  runExportWithBrowserLifecycle,
   validateAndWriteExport,
   writeExportFile,
 } from "../../../src/poc/export-json";
+import { AuthenticationRequiredError } from "../../../src/poc/hardened-index-v3";
 
 const timestamp = "2026-09-11T00:00:00.000Z";
 const options = { startDate: "2026-09-01", endDate: "2026-09-11" };
@@ -175,5 +177,40 @@ describe("POC CLI validation", () => {
         root,
       ),
     ).toThrow("absolute path outside");
+  });
+});
+
+describe("POC CLI browser lifecycle", () => {
+  const cliOptions = {
+    ...options,
+    maxOrders: 20,
+    output: join(tmpdir(), "amazon-export.json"),
+  };
+
+  test("leaves the browser open when authentication is required", async () => {
+    const close = jest.fn<Promise<void>, []>().mockResolvedValue();
+    const run = jest
+      .fn<Promise<void>, [typeof cliOptions]>()
+      .mockRejectedValue(new AuthenticationRequiredError());
+
+    await expect(
+      runExportWithBrowserLifecycle(cliOptions, { run, close }),
+    ).rejects.toBeInstanceOf(AuthenticationRequiredError);
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["successful export", undefined],
+    ["non-auth failure", new Error("sanitized operational failure")],
+  ])("closes the browser after %s", async (_label, failure) => {
+    const close = jest.fn<Promise<void>, []>().mockResolvedValue();
+    const run = jest.fn<Promise<void>, [typeof cliOptions]>();
+    if (failure) run.mockRejectedValue(failure);
+    else run.mockResolvedValue();
+
+    const result = runExportWithBrowserLifecycle(cliOptions, { run, close });
+    if (failure) await expect(result).rejects.toBe(failure);
+    else await expect(result).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });
