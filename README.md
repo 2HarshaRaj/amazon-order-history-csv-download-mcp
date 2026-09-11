@@ -76,6 +76,43 @@ Once configured, you can ask your AI assistant:
 - "What's my Amazon gift card balance?"
 - "Show me all my Amazon transactions from last month"
 
+### Hardened Amazon.in local JSON export (POC)
+
+The hardened proof-of-concept can write a bounded Amazon.in/INR export for a
+local consumer. In Windows PowerShell, use `npm.cmd` rather than `npm` (the
+PowerShell execution policy on some machines blocks the `npm.ps1` shim):
+
+```powershell
+npm.cmd run export:poc -- --start-date 2026-09-01 --end-date 2026-09-11 --max-orders 20 --output "$env:LOCALAPPDATA\AmazonOrderExport\amazon-orders.json"
+```
+
+Both dates and an absolute output path are required. Dates must be valid
+`YYYY-MM-DD` calendar dates, the start must not follow the end, and
+`--max-orders` defaults to 20 with a hard limit of 50. The output path must be
+outside this repository; normally choose a user configuration, temporary, or
+data directory. Missing parent directories are created.
+
+The command launches visible (headful) Chromium using the existing dedicated
+profile at `~/.amazon-order-history-poc/browser-data`. Cookies remain in that
+local profile and are never included in the export. Sign in and complete any
+OTP prompt manually in that window. If authentication is missing or expires,
+the command stops without writing an export; finish signing in in the visible
+window and rerun it. The command intentionally logs only bounded progress,
+counts, and sanitized errors—not order or item payloads.
+
+The UTF-8 JSON contains `metadata` (`windowStart`, `windowEnd`, and the actual
+`pagesScanned`) plus an `orders` array. Each raw Amazon OrderID remains a
+separate order with its date, numeric INR total, Amazon.in detail URL,
+extraction timestamp, and item lines. Each item contains a deterministic
+zero-based `lineIndex`, optional/empty ASIN, product name, numeric quantity,
+numeric unit and line totals, `INR`, and its safe extraction source. The export
+fails closed before file creation if a required fact is absent or invalid.
+
+This local JSON contract excludes recipient names, addresses, payment/card and
+gift-card data, tracking data, invoice contents, and browser session data. It
+does not upload data or integrate with Google Sheets, Fold, or any consumer
+repository.
+
 ## Supported Regions
 
 | Region         | Domain        | Currency |

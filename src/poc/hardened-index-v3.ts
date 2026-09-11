@@ -16,7 +16,7 @@ import { OrderHeader } from "../core/types/order";
 const REGION = "in";
 const DOMAIN = "amazon.in";
 const CURRENCY = "INR";
-const BROWSER_DATA_DIR = join(homedir(), ".amazon-order-history-poc", "browser-data");
+export const BROWSER_DATA_DIR = join(homedir(), ".amazon-order-history-poc", "browser-data");
 const ORDER_CARD_SELECTOR = ".js-order-card, .order-card, [class*=\"order-card\"]";
 const MAX_PAGES = 20;
 
@@ -46,7 +46,7 @@ const MONTHS: Record<string, number> = {
   december: 12,
 };
 
-function safeMoney(value: Money | undefined) {
+export function safeMoney(value: Money | undefined) {
   if (!value) return undefined;
   const formatted = new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -57,7 +57,7 @@ function safeMoney(value: Money | undefined) {
   return { amount: value.amount, currency: value.currency, formatted };
 }
 
-function parseInputDate(value: string): number {
+export function parseInputDate(value: string): number {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) throw new Error(`Invalid date: ${value}. Use YYYY-MM-DD.`);
   const y = Number(match[1]);
@@ -215,7 +215,7 @@ async function getNextPageUrl(targetPage: Page): Promise<string | null> {
   return new URL(href, targetPage.url()).toString();
 }
 
-async function listOrders(startDate: string, endDate: string, maxOrders: number) {
+export async function listOrders(startDate: string, endDate: string, maxOrders: number) {
   const startKey = parseInputDate(startDate);
   const endKey = parseInputDate(endDate);
   if (startKey > endKey) throw new Error("start_date must be on or before end_date.");
@@ -265,7 +265,7 @@ async function listOrders(startDate: string, endDate: string, maxOrders: number)
   };
 }
 
-async function extractOrderItems(orderId: string) {
+export async function extractOrderItems(orderId: string) {
   const targetPage = await getPage();
   await requireAuthentication(targetPage);
   const header = directHeader(orderId);
@@ -399,8 +399,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-async function shutdown(): Promise<void> {
+export async function closeBrowser(): Promise<void> {
   if (browserContext) await browserContext.close().catch(() => {});
+}
+
+async function shutdown(): Promise<void> {
+  await closeBrowser();
   process.exit(0);
 }
 
@@ -413,7 +417,9 @@ async function main(): Promise<void> {
   console.error(`[amazon-in-orders-hardened-poc-v3] Ready. Browser profile: ${BROWSER_DATA_DIR}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : "Unexpected POC error.");
+    process.exit(1);
+  });
+}

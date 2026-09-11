@@ -15,6 +15,7 @@
     "prepack": "npm run build",
     "start": "node dist/index.js",
     "start:poc": "node dist/poc/hardened-index.js",
+    "export:poc": "npm run build --silent && node dist/poc/export-json.js",
     "dev": "CORE_DEV_MODE=true tsx watch src/index.ts",
     "dev:poc": "tsx src/poc/hardened-index.ts",
     "sync-core": "node scripts/sync-core.js",
