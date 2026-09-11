@@ -93,6 +93,8 @@ export interface FetchOrdersResult {
   transactions: Transaction[];
   totalFound: number;
   errors: string[];
+  /** Number of order-list pages actually inspected during this fetch. */
+  pagesScanned: number;
 }
 
 interface ParsedDateBound {
@@ -174,6 +176,7 @@ export async function fetchOrders(
     transactions: [],
     totalFound: 0,
     errors: [],
+    pagesScanned: 0,
   };
 
   const regionConfig = getRegionByCode(region);
@@ -493,6 +496,7 @@ export async function fetchOrders(
       let hasMore = true;
 
       while (hasMore) {
+        result.pagesScanned++;
         console.error(
           `[fetch-orders] Extracting ${requestedYear} page ${pageNum}...`,
         );

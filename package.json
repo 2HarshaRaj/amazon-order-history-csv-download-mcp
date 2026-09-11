@@ -15,6 +15,7 @@
     "prepack": "npm run build",
     "start": "node dist/index.js",
     "dev": "CORE_DEV_MODE=true tsx watch src/index.ts",
+    "export:poc": "tsx src/poc/export-cli.ts",
     "sync-core": "node scripts/sync-core.js",
     "link-core": "node scripts/link-local-core.js",
     "test": "npm run test:unit && npm run test:integration",

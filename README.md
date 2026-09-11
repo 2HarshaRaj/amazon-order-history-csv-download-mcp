@@ -311,6 +311,34 @@ These help track progress and can reset client timeouts if configured.
 
 ## Development
 
+## Local hardened Amazon.in JSON export (POC)
+
+The POC exporter writes a local, UTF-8 JSON handoff containing only order and
+item facts. It is Amazon.in/INR-only and does not upload to, or know about, any
+consumer application. Recipient, address, payment method, card, gift-card,
+tracking, and invoice-download data are excluded from the contract.
+
+From Windows PowerShell, use `npm.cmd` (rather than the PowerShell-blocked `npm`
+shim) and choose an explicit destination outside this repository, normally in a
+user config, temporary, or data directory:
+
+```powershell
+npm.cmd run export:poc -- --start-date 2026-09-01 --end-date 2026-09-11 --max-orders 20 --output "$env:LOCALAPPDATA\amazon-orders\amazon-orders.json"
+```
+
+Both dates are required and must use `YYYY-MM-DD`. `--max-orders` defaults to 20
+and cannot exceed 50. The command opens visible Chromium using the dedicated
+`.browser-data/hardened-amazon-in` profile. If authentication has expired,
+complete Amazon.in sign-in in that window and rerun the command. Never commit the
+profile or a real export.
+
+The JSON boundary is `{ metadata: { windowStart, windowEnd, pagesScanned },
+orders: [...] }`. Money and quantity fields are JSON numbers; every Amazon
+OrderID remains a separate order; and item `lineIndex` values are zero-based and
+stable in extraction order. Validation is fail-closed: no destination file is
+written if a required date, INR amount, quantity, item name, URL, or source is
+missing or invalid.
+
 ```bash
 # Run in development mode
 npm run dev
