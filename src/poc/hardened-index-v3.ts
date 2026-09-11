@@ -152,7 +152,7 @@ async function isAuthenticated(targetPage: Page): Promise<boolean> {
     });
   }
 
-  if (targetPage.url().includes("/ap/signin") || targetPage.url().includes("/ap/cvf")) {
+  if (isAuthenticationRedirect(targetPage.url())) {
     return false;
   }
 
@@ -167,6 +167,17 @@ export class AuthenticationRequiredError extends Error {
   constructor() {
     super("Amazon.in login required. Complete sign-in in the visible dedicated Chromium window, then retry.");
     this.name = "AuthenticationRequiredError";
+  }
+}
+
+export function isAuthenticationRedirect(url: string): boolean {
+  try {
+    const pathname = new URL(url).pathname;
+    return ["/ap/signin", "/ap/cvf"].some(
+      (authPath) => pathname === authPath || pathname.startsWith(`${authPath}/`),
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -241,8 +252,8 @@ export async function listOrders(startDate: string, endDate: string, maxOrders: 
 
   while (url && pagesScanned < MAX_PAGES && matches.length < maxOrders) {
     await targetPage.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await targetPage.waitForSelector(ORDER_CARD_SELECTOR, { timeout: 3000 });
     await requireAuthentication(targetPage);
+    await targetPage.waitForSelector(ORDER_CARD_SELECTOR, { timeout: 3000 });
 
     const pageOrders = await parseCurrentOrderPage(targetPage);
     pagesScanned += 1;
@@ -278,13 +289,10 @@ export async function extractOrderItems(orderId: string) {
   const header = directHeader(orderId);
 
   await targetPage.goto(header.detailUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+  await requireAuthentication(targetPage);
   await targetPage
     .waitForSelector('[data-component="purchasedItems"], .a-box, #od-subtotals', { timeout: 2500 })
     .catch(() => {});
-
-  if (targetPage.url().includes("/ap/signin") || targetPage.url().includes("/ap/cvf")) {
-    throw new Error("Amazon.in session expired; sign in again and retry.");
-  }
 
   let items = await amazon.extractItems(targetPage, header).catch(() => []);
   let source = "order-detail";
@@ -294,6 +302,7 @@ export async function extractOrderItems(orderId: string) {
       waitUntil: "domcontentloaded",
       timeout: 12000,
     });
+    await requireAuthentication(targetPage);
     await targetPage
       .waitForSelector('[data-component="purchasedItems"], table', { timeout: 2000 })
       .catch(() => {});

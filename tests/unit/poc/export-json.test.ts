@@ -10,7 +10,10 @@ import {
   validateAndWriteExport,
   writeExportFile,
 } from "../../../src/poc/export-json";
-import { AuthenticationRequiredError } from "../../../src/poc/hardened-index-v3";
+import {
+  AuthenticationRequiredError,
+  isAuthenticationRedirect,
+} from "../../../src/poc/hardened-index-v3";
 
 const timestamp = "2026-09-11T00:00:00.000Z";
 const options = { startDate: "2026-09-01", endDate: "2026-09-11" };
@@ -212,5 +215,24 @@ describe("POC CLI browser lifecycle", () => {
     if (failure) await expect(result).rejects.toBe(failure);
     else await expect(result).resolves.toBeUndefined();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Amazon.in authentication redirects", () => {
+  test.each([
+    "https://www.amazon.in/ap/signin?openid.return_to=%2Fyour-orders",
+    "https://www.amazon.in/ap/cvf",
+    "https://www.amazon.in/ap/cvf/request?arb=example",
+  ])("recognizes %s as requiring authentication", (url) => {
+    expect(isAuthenticationRedirect(url)).toBe(true);
+  });
+
+  test.each([
+    "https://www.amazon.in/your-orders/orders?timeFilter=year-2026",
+    "https://www.amazon.in/gp/your-account/order-details?orderID=example",
+    "https://www.amazon.in/example?next=%2Fap%2Fsignin",
+    "not-a-url",
+  ])("does not classify %s as an authentication redirect", (url) => {
+    expect(isAuthenticationRedirect(url)).toBe(false);
   });
 });
