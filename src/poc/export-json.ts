@@ -1,7 +1,8 @@
 import { promises as fs } from 'fs';
-import { dirname } from 'path';
+import { dirname, basename, join } from 'path';
 import { z } from 'zod';
 import { OrderAdjustment } from '../amazon/extractors/order-adjustments';
+import type { ExtractedOrderItems } from './hardened-index-v3';
 
 const itemSchema = z.object({
   lineIndex: z.number().int().nonnegative(),
@@ -36,6 +37,16 @@ export const pocOrderSchema = z.object({
 
 export type PocOrder = z.infer<typeof pocOrderSchema>;
 
+export type PocOrderMetadata = Omit<PocOrder, 'items' | 'adjustments'>;
+
+/** Build the document used by the live exporter from the hardened browser result. */
+export function buildPocOrder(
+  metadata: PocOrderMetadata,
+  extracted: ExtractedOrderItems,
+): PocOrder {
+  return pocOrderSchema.parse({ ...metadata, items: extracted.items, adjustments: extracted.adjustments });
+}
+
 function toPaise(amount: number): number {
   return Math.round(amount * 100);
 }
@@ -64,5 +75,14 @@ export function validatePocOrders(orders: readonly PocOrder[]): void {
 export async function writePocOrdersJson(outputPath: string, orders: readonly PocOrder[]): Promise<void> {
   validatePocOrders(orders);
   await fs.mkdir(dirname(outputPath), { recursive: true });
-  await fs.writeFile(outputPath, `${JSON.stringify(orders, null, 2)}\n`, { encoding: 'utf8', flag: 'w' });
+  const temporaryPath = join(dirname(outputPath), `.${basename(outputPath)}.${process.pid}.tmp`);
+  try {
+    await fs.writeFile(temporaryPath, `${JSON.stringify(orders, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+    });
+    await fs.rename(temporaryPath, outputPath);
+  } finally {
+    await fs.rm(temporaryPath, { force: true });
+  }
 }

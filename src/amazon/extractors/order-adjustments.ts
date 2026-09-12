@@ -24,7 +24,7 @@ interface SummaryRow {
 }
 
 const STRUCTURAL = /^(?:item\s*)?subtotal|^(?:order|grand)\s*total|^total$/i;
-const PRIVATE_OR_PAYMENT = /payment|paid|card|visa|mastercard|amex|account|gift[ -]?card|claim|address|recipient|phone|e-?mail|tracking|shipment/i;
+const PRIVATE_OR_PAYMENT = /payment|paid|card|visa|mastercard|amex|account|gift[ -]?card|claim|address|recipient|phone|e-?mail|invoice|tracking|shipment/i;
 
 function classify(label: string): AdjustmentType | null {
   if (STRUCTURAL.test(label) || PRIVATE_OR_PAYMENT.test(label)) return null;

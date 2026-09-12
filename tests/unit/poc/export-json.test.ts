@@ -1,7 +1,12 @@
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { PocOrder, validatePocOrders, writePocOrdersJson } from '../../../src/poc/export-json';
+import {
+  buildPocOrder,
+  PocOrder,
+  validatePocOrders,
+  writePocOrdersJson,
+} from '../../../src/poc/export-json';
 
 function order(overrides: Partial<PocOrder> = {}): PocOrder {
   return {
@@ -34,6 +39,24 @@ function order(overrides: Partial<PocOrder> = {}): PocOrder {
 }
 
 describe('POC JSON reconciliation', () => {
+  test('the live document builder emits extracted adjustments', () => {
+    const expected = order();
+    const built = buildPocOrder({
+      orderId: expected.orderId,
+      orderDate: expected.orderDate,
+      orderTotal: expected.orderTotal,
+      currency: expected.currency,
+      orderUrl: expected.orderUrl,
+      extractedAt: expected.extractedAt,
+    }, {
+      items: expected.items,
+      adjustments: expected.adjustments,
+      source: 'order-detail',
+    });
+    expect(built.adjustments).toEqual(expected.adjustments);
+    expect(() => validatePocOrders([built])).not.toThrow();
+  });
+
   test('accepts 199 plus the explicit fee of 5 as 204', () => {
     expect(() => validatePocOrders([order()])).not.toThrow();
   });
