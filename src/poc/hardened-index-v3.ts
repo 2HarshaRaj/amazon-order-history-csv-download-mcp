@@ -29,6 +29,88 @@ type MinimalOrder = {
   orderTotal?: ReturnType<typeof safeMoney>;
 };
 
+export type AdjustmentType =
+  | "shipping"
+  | "marketplace_fee"
+  | "discount"
+  | "promotion"
+  | "tax"
+  | "gift_wrap"
+  | "other";
+
+export interface OrderAdjustment {
+  type: AdjustmentType;
+  label: string;
+  amount: ReturnType<typeof safeMoney>;
+  extractionSource: "order-detail-summary";
+}
+
+const STRUCTURAL_TOTAL_LABEL =
+  /^(?:item(?:s|\(s\))?\s+subtotal|subtotal|order\s+total|grand\s+total|total)\s*:?$/i;
+const PRIVATE_SUMMARY_LABEL =
+  /(?:payment|card|bank|account|upi|cash|credit|debit|billing|gift[ -]?card|claim|recipient|address|phone|e-?mail|tracking|shipment|invoice|tax\s+id|gstin)/i;
+
+function adjustmentType(label: string): AdjustmentType {
+  if (/discount/i.test(label)) return "discount";
+  if (/promotion|promo/i.test(label)) return "promotion";
+  if (/shipping|delivery/i.test(label)) return "shipping";
+  if (/marketplace\s+fee/i.test(label)) return "marketplace_fee";
+  if (/tax|gst|vat/i.test(label)) return "tax";
+  if (/gift\s*wrap/i.test(label)) return "gift_wrap";
+  return "other";
+}
+
+/** Parse only label/amount rows already isolated inside the order-detail summary. */
+export function parseOrderSummaryAdjustments(
+  rows: string[],
+): OrderAdjustment[] {
+  const adjustments: OrderAdjustment[] = [];
+  for (const row of rows) {
+    const normalized = row.replace(/\u00a0/g, " ").trim();
+    const match = /^([^\n:]{1,80})\s*:?\s*(?:\n|\s{2,})(.+)$/s.exec(normalized);
+    if (!match) continue;
+    const label = match[1].trim();
+    if (STRUCTURAL_TOTAL_LABEL.test(label) || PRIVATE_SUMMARY_LABEL.test(label))
+      continue;
+
+    const type = adjustmentType(label);
+    const amountText = match[2].trim();
+    const numeric = amountText.match(
+      /^(-)?\s*(?:₹|INR\s*)\s*([\d,]+(?:\.\d{1,2})?)$/i,
+    );
+    if (!numeric) {
+      throw new Error("Order-summary adjustment validation failed.");
+    }
+    const parsed = parseMoney(`₹${numeric[2]}`, CURRENCY);
+    if (!parsed) throw new Error("Order-summary adjustment validation failed.");
+    const reducesTotal =
+      type === "discount" || type === "promotion" || numeric[1] === "-";
+    const amount = {
+      ...parsed,
+      amount: reducesTotal ? -Math.abs(parsed.amount) : parsed.amount,
+    };
+    adjustments.push({
+      type,
+      label,
+      amount: safeMoney(amount),
+      extractionSource: "order-detail-summary",
+    });
+  }
+  return adjustments;
+}
+
+async function extractOrderSummaryAdjustments(
+  targetPage: Page,
+): Promise<OrderAdjustment[]> {
+  const summary = targetPage.locator("#od-subtotals").first();
+  if ((await summary.count().catch(() => 0)) === 0) return [];
+  const rows = await summary
+    .locator(".a-row")
+    .allInnerTexts()
+    .catch(() => []);
+  return parseOrderSummaryAdjustments(rows);
+}
+
 const MONTHS: Record<string, number> = {
   january: 1,
   february: 2,
@@ -292,6 +374,9 @@ export async function extractOrderItems(orderId: string, diagnostics?: ItemDiagn
     .waitForSelector('[data-component="purchasedItems"], .a-box, #od-subtotals', { timeout: 2500 })
     .catch(() => {});
 
+  // Capture the bounded order summary before invoice fallback can navigate away.
+  const adjustments = await extractOrderSummaryAdjustments(targetPage);
+
   let items = await extractItems(targetPage, header, diagnostics).catch(() => []);
   let source = "order-detail";
 
@@ -315,6 +400,7 @@ export async function extractOrderItems(orderId: string, diagnostics?: ItemDiagn
     orderId,
     extractionSource: source,
     itemCount: items.length,
+    adjustments,
     items: items.map((item) => ({
       asin: item.asin,
       productName: item.name,
