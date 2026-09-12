@@ -2,6 +2,7 @@
 
 import { mkdir, writeFile } from "fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "path";
+import type { ItemDiagnostics } from "../amazon/extractors/items";
 
 import {
   AuthenticationRequiredError,
@@ -57,6 +58,12 @@ interface ExportLifecycleDependencies {
   close: () => Promise<void>;
 }
 
+interface ExportRunDependencies {
+  list: typeof listOrders;
+  extract: typeof extractOrderItems;
+  write: typeof validateAndWriteExport;
+}
+
 interface OutputPathOperations {
   isAbsolute(path: string): boolean;
   relative(from: string, to: string): string;
@@ -66,6 +73,9 @@ interface OutputPathOperations {
 
 const AUTH_REQUIRED_MESSAGE =
   "Amazon.in login required. Complete sign-in/OTP in the visible dedicated Chromium window, then rerun the command. The browser has been left open.";
+
+/** Discard extractor diagnostics because they can contain personal order data. */
+export const privacySafeItemDiagnostics: ItemDiagnostics = () => {};
 
 function optionValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name);
@@ -256,9 +266,14 @@ export async function validateAndWriteExport(
 export async function runExport(
   options: CliOptions,
   log: (message: string) => void = console.error,
+  dependencies: ExportRunDependencies = {
+    list: listOrders,
+    extract: extractOrderItems,
+    write: validateAndWriteExport,
+  },
 ): Promise<void> {
   log("Starting bounded Amazon.in export in the visible Chromium window.");
-  const listed = await listOrders(
+  const listed = await dependencies.list(
     options.startDate,
     options.endDate,
     options.maxOrders,
@@ -270,9 +285,12 @@ export async function runExport(
   for (const summary of listed.orders)
     combined.push({
       summary,
-      detail: await extractOrderItems(summary.orderId),
+      detail: await dependencies.extract(
+        summary.orderId,
+        privacySafeItemDiagnostics,
+      ),
     });
-  const document = await validateAndWriteExport(
+  const document = await dependencies.write(
     options.output,
     options,
     listed.pagesScanned,

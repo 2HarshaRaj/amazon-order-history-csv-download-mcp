@@ -7,8 +7,7 @@ import { chromium, BrowserContext, Page } from "playwright";
 import { homedir } from "os";
 import { join } from "path";
 
-import { AmazonPlugin } from "../amazon/adapter";
-import { extractDataComponentItems } from "../amazon/extractors/items";
+import { extractDataComponentItems, extractItems, ItemDiagnostics } from "../amazon/extractors/items";
 import { getInvoiceUrl } from "../amazon/extractors/invoice";
 import { Money, parseMoney } from "../core/types/money";
 import { OrderHeader } from "../core/types/order";
@@ -20,7 +19,6 @@ export const BROWSER_DATA_DIR = join(homedir(), ".amazon-order-history-poc", "br
 const ORDER_CARD_SELECTOR = ".js-order-card, .order-card, [class*=\"order-card\"]";
 const MAX_PAGES = 20;
 
-const amazon = new AmazonPlugin();
 let browserContext: BrowserContext | null = null;
 let page: Page | null = null;
 
@@ -283,7 +281,7 @@ export async function listOrders(startDate: string, endDate: string, maxOrders: 
   };
 }
 
-export async function extractOrderItems(orderId: string) {
+export async function extractOrderItems(orderId: string, diagnostics?: ItemDiagnostics) {
   const targetPage = await getPage();
   await requireAuthentication(targetPage);
   const header = directHeader(orderId);
@@ -294,7 +292,7 @@ export async function extractOrderItems(orderId: string) {
     .waitForSelector('[data-component="purchasedItems"], .a-box, #od-subtotals', { timeout: 2500 })
     .catch(() => {});
 
-  let items = await amazon.extractItems(targetPage, header).catch(() => []);
+  let items = await extractItems(targetPage, header, diagnostics).catch(() => []);
   let source = "order-detail";
 
   if (items.length === 0) {
@@ -306,7 +304,7 @@ export async function extractOrderItems(orderId: string) {
     await targetPage
       .waitForSelector('[data-component="purchasedItems"], table', { timeout: 2000 })
       .catch(() => {});
-    const invoiceItems = await extractDataComponentItems(targetPage, header, CURRENCY).catch(() => null);
+    const invoiceItems = await extractDataComponentItems(targetPage, header, CURRENCY, diagnostics).catch(() => null);
     if (invoiceItems && invoiceItems.length > 0) {
       items = invoiceItems;
       source = "invoice-safe-fallback";

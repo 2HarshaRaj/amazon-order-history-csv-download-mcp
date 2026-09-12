@@ -7,6 +7,7 @@ import packageJson from "../../../package.json";
 import {
   createExportDocument,
   parseCliOptions,
+  runExport,
   runExportWithBrowserLifecycle,
   validateOutputPath,
   validateAndWriteExport,
@@ -243,6 +244,52 @@ describe("POC CLI browser lifecycle", () => {
     if (failure) await expect(result).rejects.toBe(failure);
     else await expect(result).resolves.toBeUndefined();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POC CLI diagnostic privacy", () => {
+  test("suppresses payload-bearing extractor diagnostics while retaining bounded status", async () => {
+    const personalPayload = {
+      orderId: "408-1234567-7654321",
+      asin: "B0PERSONAL1",
+      productName: "Private product name",
+      price: "₹1,234.56",
+    };
+    const logs: string[] = [];
+    const diagnosticMessages: string[] = [];
+    const order = rawOrder(personalPayload.orderId);
+    order.detail.items[0].asin = personalPayload.asin;
+    order.detail.items[0].productName = personalPayload.productName;
+
+    await runExport(
+      {
+        ...options,
+        maxOrders: 1,
+        output: join(tmpdir(), "privacy-safe-export.json"),
+      },
+      (message) => logs.push(message),
+      {
+        list: jest.fn().mockResolvedValue({
+          pagesScanned: 1,
+          orders: [order.summary],
+        }),
+        extract: jest.fn().mockImplementation(async (_orderId, diagnostics) => {
+          const diagnostic = `[items] Found item ${personalPayload.asin} - ${personalPayload.productName} - ${personalPayload.price}; order ${personalPayload.orderId}`;
+          diagnosticMessages.push(diagnostic);
+          diagnostics(diagnostic);
+          return order.detail;
+        }),
+        write: jest.fn().mockResolvedValue({ metadata: {}, orders: [order] }),
+      },
+    );
+
+    expect(diagnosticMessages).toHaveLength(1);
+    const consoleOutput = logs.join("\n");
+    expect(consoleOutput).toContain("Inspected 1 order-list page(s)");
+    expect(consoleOutput).toContain("Export complete: wrote 1 order(s)");
+    for (const value of Object.values(personalPayload)) {
+      expect(consoleOutput).not.toContain(value);
+    }
   });
 });
 
