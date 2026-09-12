@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { mkdir, writeFile } from "fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "path";
+import { dirname, isAbsolute, relative, resolve, sep } from "path";
 
 import {
   AuthenticationRequiredError,
@@ -57,6 +57,13 @@ interface ExportLifecycleDependencies {
   close: () => Promise<void>;
 }
 
+interface OutputPathOperations {
+  isAbsolute(path: string): boolean;
+  relative(from: string, to: string): string;
+  resolve(path: string): string;
+  sep: string;
+}
+
 const AUTH_REQUIRED_MESSAGE =
   "Amazon.in login required. Complete sign-in/OTP in the visible dedicated Chromium window, then rerun the command. The browser has been left open.";
 
@@ -107,19 +114,35 @@ export function parseCliOptions(
     throw new Error("--max-orders must be an integer from 1 through 50.");
   }
 
-  const output = resolve(outputArg);
-  const root = resolve(repositoryRoot);
-  const fromRoot = relative(root, output);
+  const output = validateOutputPath(outputArg, repositoryRoot);
+  return { startDate, endDate, maxOrders, output };
+}
+
+export function validateOutputPath(
+  outputArg: string,
+  repositoryRoot: string,
+  pathOperations: OutputPathOperations = {
+    isAbsolute,
+    relative,
+    resolve,
+    sep,
+  },
+): string {
+  const output = pathOperations.resolve(outputArg);
+  const root = pathOperations.resolve(repositoryRoot);
+  const fromRoot = pathOperations.relative(root, output);
   if (
-    !isAbsolute(outputArg) ||
+    !pathOperations.isAbsolute(outputArg) ||
     fromRoot === "" ||
-    (!fromRoot.startsWith("..") && !isAbsolute(fromRoot))
+    (fromRoot !== ".." &&
+      !fromRoot.startsWith(`..${pathOperations.sep}`) &&
+      !pathOperations.isAbsolute(fromRoot))
   ) {
     throw new Error(
       "--output must be an absolute path outside the repository.",
     );
   }
-  return { startDate, endDate, maxOrders, output };
+  return output;
 }
 
 function numericMoney(value: SafeMoney | undefined, label: string): number {

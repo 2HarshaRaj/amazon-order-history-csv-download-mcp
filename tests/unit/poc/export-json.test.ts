@@ -1,12 +1,14 @@
 import { mkdtemp, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, win32 } from "path";
+import packageJson from "../../../package.json";
 
 import {
   createExportDocument,
   parseCliOptions,
   runExportWithBrowserLifecycle,
+  validateOutputPath,
   validateAndWriteExport,
   writeExportFile,
 } from "../../../src/poc/export-json";
@@ -180,6 +182,32 @@ describe("POC CLI validation", () => {
         root,
       ),
     ).toThrow("absolute path outside");
+  });
+
+  test("accepts a Windows absolute output path containing spaces", () => {
+    const output =
+      "C:\\Users\\Example User\\AppData\\Local\\amazon-orders\\export.json";
+    expect(
+      validateOutputPath(
+        output,
+        "C:\\Users\\Example User\\source\\amazon-order-history-csv-download-mcp",
+        win32,
+      ),
+    ).toBe(output);
+  });
+
+  test("rejects an in-repository path whose name begins with two dots", () => {
+    expect(() =>
+      validateOutputPath(join(root, "..private", "export.json"), root),
+    ).toThrow("absolute path outside");
+  });
+
+  test("keeps forwarded CLI arguments out of the compound build command", () => {
+    expect(packageJson.scripts["preexport:poc"]).toBe("npm run build --silent");
+    expect(packageJson.scripts["export:poc"]).toBe(
+      "node dist/poc/export-json.js",
+    );
+    expect(packageJson.scripts["export:poc"]).not.toContain("&&");
   });
 });
 
