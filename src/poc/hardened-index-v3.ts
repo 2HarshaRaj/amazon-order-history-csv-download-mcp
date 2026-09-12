@@ -7,8 +7,7 @@ import { chromium, BrowserContext, Page } from "playwright";
 import { homedir } from "os";
 import { join } from "path";
 
-import { AmazonPlugin } from "../amazon/adapter";
-import { extractDataComponentItems } from "../amazon/extractors/items";
+import { extractDataComponentItems, extractItems, ItemDiagnostics } from "../amazon/extractors/items";
 import { getInvoiceUrl } from "../amazon/extractors/invoice";
 import { Money, parseMoney } from "../core/types/money";
 import { OrderHeader } from "../core/types/order";
@@ -16,11 +15,10 @@ import { OrderHeader } from "../core/types/order";
 const REGION = "in";
 const DOMAIN = "amazon.in";
 const CURRENCY = "INR";
-const BROWSER_DATA_DIR = join(homedir(), ".amazon-order-history-poc", "browser-data");
+export const BROWSER_DATA_DIR = join(homedir(), ".amazon-order-history-poc", "browser-data");
 const ORDER_CARD_SELECTOR = ".js-order-card, .order-card, [class*=\"order-card\"]";
 const MAX_PAGES = 20;
 
-const amazon = new AmazonPlugin();
 let browserContext: BrowserContext | null = null;
 let page: Page | null = null;
 
@@ -46,7 +44,7 @@ const MONTHS: Record<string, number> = {
   december: 12,
 };
 
-function safeMoney(value: Money | undefined) {
+export function safeMoney(value: Money | undefined) {
   if (!value) return undefined;
   const formatted = new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -57,7 +55,7 @@ function safeMoney(value: Money | undefined) {
   return { amount: value.amount, currency: value.currency, formatted };
 }
 
-function parseInputDate(value: string): number {
+export function parseInputDate(value: string): number {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) throw new Error(`Invalid date: ${value}. Use YYYY-MM-DD.`);
   const y = Number(match[1]);
@@ -152,7 +150,7 @@ async function isAuthenticated(targetPage: Page): Promise<boolean> {
     });
   }
 
-  if (targetPage.url().includes("/ap/signin") || targetPage.url().includes("/ap/cvf")) {
+  if (isAuthenticationRedirect(targetPage.url())) {
     return false;
   }
 
@@ -163,9 +161,27 @@ async function isAuthenticated(targetPage: Page): Promise<boolean> {
   return signInControls === 0;
 }
 
+export class AuthenticationRequiredError extends Error {
+  constructor() {
+    super("Amazon.in login required. Complete sign-in in the visible dedicated Chromium window, then retry.");
+    this.name = "AuthenticationRequiredError";
+  }
+}
+
+export function isAuthenticationRedirect(url: string): boolean {
+  try {
+    const pathname = new URL(url).pathname;
+    return ["/ap/signin", "/ap/cvf"].some(
+      (authPath) => pathname === authPath || pathname.startsWith(`${authPath}/`),
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function requireAuthentication(targetPage: Page): Promise<void> {
   if (!(await isAuthenticated(targetPage))) {
-    throw new Error("Amazon.in login required. Complete sign-in in the visible dedicated Chromium window, then retry.");
+    throw new AuthenticationRequiredError();
   }
 }
 
@@ -215,7 +231,7 @@ async function getNextPageUrl(targetPage: Page): Promise<string | null> {
   return new URL(href, targetPage.url()).toString();
 }
 
-async function listOrders(startDate: string, endDate: string, maxOrders: number) {
+export async function listOrders(startDate: string, endDate: string, maxOrders: number) {
   const startKey = parseInputDate(startDate);
   const endKey = parseInputDate(endDate);
   if (startKey > endKey) throw new Error("start_date must be on or before end_date.");
@@ -234,8 +250,8 @@ async function listOrders(startDate: string, endDate: string, maxOrders: number)
 
   while (url && pagesScanned < MAX_PAGES && matches.length < maxOrders) {
     await targetPage.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await targetPage.waitForSelector(ORDER_CARD_SELECTOR, { timeout: 3000 });
     await requireAuthentication(targetPage);
+    await targetPage.waitForSelector(ORDER_CARD_SELECTOR, { timeout: 3000 });
 
     const pageOrders = await parseCurrentOrderPage(targetPage);
     pagesScanned += 1;
@@ -265,21 +281,18 @@ async function listOrders(startDate: string, endDate: string, maxOrders: number)
   };
 }
 
-async function extractOrderItems(orderId: string) {
+export async function extractOrderItems(orderId: string, diagnostics?: ItemDiagnostics) {
   const targetPage = await getPage();
   await requireAuthentication(targetPage);
   const header = directHeader(orderId);
 
   await targetPage.goto(header.detailUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+  await requireAuthentication(targetPage);
   await targetPage
     .waitForSelector('[data-component="purchasedItems"], .a-box, #od-subtotals', { timeout: 2500 })
     .catch(() => {});
 
-  if (targetPage.url().includes("/ap/signin") || targetPage.url().includes("/ap/cvf")) {
-    throw new Error("Amazon.in session expired; sign in again and retry.");
-  }
-
-  let items = await amazon.extractItems(targetPage, header).catch(() => []);
+  let items = await extractItems(targetPage, header, diagnostics).catch(() => []);
   let source = "order-detail";
 
   if (items.length === 0) {
@@ -287,10 +300,11 @@ async function extractOrderItems(orderId: string) {
       waitUntil: "domcontentloaded",
       timeout: 12000,
     });
+    await requireAuthentication(targetPage);
     await targetPage
       .waitForSelector('[data-component="purchasedItems"], table', { timeout: 2000 })
       .catch(() => {});
-    const invoiceItems = await extractDataComponentItems(targetPage, header, CURRENCY).catch(() => null);
+    const invoiceItems = await extractDataComponentItems(targetPage, header, CURRENCY, diagnostics).catch(() => null);
     if (invoiceItems && invoiceItems.length > 0) {
       items = invoiceItems;
       source = "invoice-safe-fallback";
@@ -399,8 +413,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-async function shutdown(): Promise<void> {
+export async function closeBrowser(): Promise<void> {
   if (browserContext) await browserContext.close().catch(() => {});
+}
+
+async function shutdown(): Promise<void> {
+  await closeBrowser();
   process.exit(0);
 }
 
@@ -413,7 +431,9 @@ async function main(): Promise<void> {
   console.error(`[amazon-in-orders-hardened-poc-v3] Ready. Browser profile: ${BROWSER_DATA_DIR}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : "Unexpected POC error.");
+    process.exit(1);
+  });
+}

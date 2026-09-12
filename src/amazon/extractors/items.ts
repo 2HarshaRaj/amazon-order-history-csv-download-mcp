@@ -12,7 +12,9 @@ import { parseMoney } from '../../core/types/money';
 import type { Money } from '../../core/types/money';
 import { getRegionByCode } from '../regions';
 
-function debug(msg: string): void {
+export type ItemDiagnostics = (message: string) => void;
+
+const debug: ItemDiagnostics = (msg) => {
   const line = `[${new Date().toISOString()}] [items] ${msg}\n`;
   try {
     appendFileSync('/tmp/amazon-mcp-debug.log', line);
@@ -20,7 +22,7 @@ function debug(msg: string): void {
     // ignore
   }
   console.error(`[items] ${msg}`);
-}
+};
 
 /**
  * Seller information with separate sold by and supplied by fields.
@@ -210,6 +212,7 @@ async function extractItemFromScope(
   header: OrderHeader,
   currency: string,
   containerSeller: SellerInfo | undefined,
+  diagnostics: ItemDiagnostics,
 ): Promise<Item | null> {
   const titleLink = scope.locator('[data-component="itemTitle"] a').first();
   const name = await optionalText(titleLink);
@@ -221,7 +224,7 @@ async function extractItemFromScope(
   const quantity = await extractQuantityFromScope(scope);
   const seller = await extractSellerFromScope(scope) || containerSeller;
 
-  debug(`Data components: Found item ${asin} - ${name.slice(0, 40)} - ${unitPrice.formatted} x${quantity}`);
+  diagnostics(`Data components: Found item ${asin} - ${name.slice(0, 40)} - ${unitPrice.formatted} x${quantity}`);
   return {
     id: asin || name.trim().slice(0, 50),
     asin,
@@ -242,12 +245,13 @@ async function extractItemsFromContainer(
   container: Locator,
   header: OrderHeader,
   currency: string,
+  diagnostics: ItemDiagnostics,
 ): Promise<Item[]> {
   const rows = await container.locator('.a-fixed-left-grid').all();
   const titleCount = await container.locator('[data-component="itemTitle"] a').count().catch(() => 0);
   const itemScopes = rows.length > 0 ? rows : titleCount === 1 ? [container] : [];
   if (itemScopes.length === 0) {
-    debug(`Data components: Skipping ambiguous container with ${titleCount} titles and no item rows`);
+    diagnostics(`Data components: Skipping ambiguous container with ${titleCount} titles and no item rows`);
     return [];
   }
 
@@ -255,10 +259,10 @@ async function extractItemsFromContainer(
   const items: Item[] = [];
   for (const scope of itemScopes) {
     try {
-      const item = await extractItemFromScope(scope, header, currency, containerSeller);
+      const item = await extractItemFromScope(scope, header, currency, containerSeller, diagnostics);
       if (item) items.push(item);
     } catch (error) {
-      debug(`Data components: Error extracting item: ${error}`);
+      diagnostics(`Data components: Error extracting item: ${error}`);
     }
   }
   return items;
@@ -274,16 +278,17 @@ export async function extractDataComponentItems(
   page: Page,
   header: OrderHeader,
   currency: string,
+  diagnostics: ItemDiagnostics = debug,
 ): Promise<Item[] | null> {
   const purchasedItemContainers = await page.locator('[data-component="purchasedItems"]').all();
   const containers = purchasedItemContainers.length > 0
     ? purchasedItemContainers
     : await page.locator('xpath=//div[div[@data-component="itemTitle"]]').all();
-  debug(`Data components: Found ${containers.length} item containers`);
+  diagnostics(`Data components: Found ${containers.length} item containers`);
 
   const items: Item[] = [];
   for (const container of containers) {
-    items.push(...await extractItemsFromContainer(container, header, currency));
+    items.push(...await extractItemsFromContainer(container, header, currency, diagnostics));
   }
   return items.length > 0 ? items : null;
 }
@@ -292,10 +297,10 @@ export async function extractDataComponentItems(
  * Strategy 0 (AZAD): Physical orders with fixed-left-grid-inner
  * XPath: .//div[contains(@class, "fixed-left-grid-inner") and .//a[contains(@href, "/gp/product/")] and .//*[contains(@class, "price")]]
  */
-async function extractItemsStrategy0(page: Page, header: OrderHeader, currency: string): Promise<Item[] | null> {
+async function extractItemsStrategy0(page: Page, header: OrderHeader, currency: string, diagnostics: ItemDiagnostics): Promise<Item[] | null> {
   // More specific selector - must have product link AND price
   const itemElements = await page.locator('xpath=//div[contains(@class, "fixed-left-grid-inner") and .//a[contains(@href, "/gp/product/") or contains(@href, "/dp/")] and .//*[contains(@class, "price")]]').all();
-  debug(`Strategy0: Found ${itemElements.length} item elements`);
+  diagnostics(`Strategy0: Found ${itemElements.length} item elements`);
   
   if (itemElements.length === 0) return null;
 
@@ -309,7 +314,7 @@ async function extractItemsStrategy0(page: Page, header: OrderHeader, currency: 
       const name = await linkElem.textContent({ timeout: 300 }).catch(() => '');
       
       if (!href || !name?.trim()) {
-        debug(`Strategy0: Skipping - no href or name`);
+        diagnostics(`Strategy0: Skipping - no href or name`);
         continue;
       }
 
@@ -332,7 +337,7 @@ async function extractItemsStrategy0(page: Page, header: OrderHeader, currency: 
       const seller = extractSellerFromText(containerText || '');
       const condition = extractConditionFromText(containerText || '');
 
-      debug(`Strategy0: Found item: ${asin} - ${name.slice(0, 40)} - ${price.formatted}${seller ? ` - Seller: ${seller.name}` : ''}${condition ? ` - ${condition}` : ''}`);
+      diagnostics(`Strategy0: Found item: ${asin} - ${name.slice(0, 40)} - ${price.formatted}${seller ? ` - Seller: ${seller.name}` : ''}${condition ? ` - ${condition}` : ''}`);
 
       items.push({
         id: asin || href,
@@ -348,7 +353,7 @@ async function extractItemsStrategy0(page: Page, header: OrderHeader, currency: 
         platformData: {},
       });
     } catch (e) {
-      debug(`Strategy0: Error: ${e}`);
+      diagnostics(`Strategy0: Error: ${e}`);
       continue;
     }
   }
@@ -360,9 +365,9 @@ async function extractItemsStrategy0(page: Page, header: OrderHeader, currency: 
  * Strategy 2 (AZAD): Amazon.com 2016 layout
  * XPath: //div[contains(@id, "orderDetails")]//a[contains(@href, "/product/")]/parent::*
  */
-async function extractItemsStrategy2(page: Page, header: OrderHeader, currency: string): Promise<Item[] | null> {
+async function extractItemsStrategy2(page: Page, header: OrderHeader, currency: string, diagnostics: ItemDiagnostics): Promise<Item[] | null> {
   const itemElements = await page.locator('xpath=//div[contains(@id, "orderDetails")]//a[contains(@href, "/product/") or contains(@href, "/dp/")]/parent::*').all();
-  debug(`Strategy2: Found ${itemElements.length} item elements`);
+  diagnostics(`Strategy2: Found ${itemElements.length} item elements`);
   
   if (itemElements.length === 0) return null;
 
@@ -392,7 +397,7 @@ async function extractItemsStrategy2(page: Page, header: OrderHeader, currency: 
       const seller = extractSellerFromText(containerText || '');
       const condition = extractConditionFromText(containerText || '');
 
-      debug(`Strategy2: Found item: ${asin} - ${name.slice(0, 40)} - ${price.formatted}${seller ? ` - Seller: ${seller.name}` : ''}${condition ? ` - ${condition}` : ''}`);
+      diagnostics(`Strategy2: Found item: ${asin} - ${name.slice(0, 40)} - ${price.formatted}${seller ? ` - Seller: ${seller.name}` : ''}${condition ? ` - ${condition}` : ''}`);
 
       items.push({
         id: asin || href,
@@ -408,7 +413,7 @@ async function extractItemsStrategy2(page: Page, header: OrderHeader, currency: 
         platformData: {},
       });
     } catch (e) {
-      debug(`Strategy2: Error: ${e}`);
+      diagnostics(`Strategy2: Error: ${e}`);
       continue;
     }
   }
@@ -420,9 +425,9 @@ async function extractItemsStrategy2(page: Page, header: OrderHeader, currency: 
  * Strategy 3 (AZAD): Grocery orders (Amazon Fresh, Whole Foods - 2021+)
  * XPath: //div[contains(@class, "a-section")]//span[contains(@id, "item-total-price")]/parent::div/parent::div/parent::div
  */
-async function extractItemsStrategy3(page: Page, header: OrderHeader, currency: string): Promise<Item[] | null> {
+async function extractItemsStrategy3(page: Page, header: OrderHeader, currency: string, diagnostics: ItemDiagnostics): Promise<Item[] | null> {
   const itemElements = await page.locator('xpath=//div[contains(@class, "a-section")]//span[contains(@id, "item-total-price")]/ancestor::div[3]').all();
-  debug(`Strategy3: Found ${itemElements.length} grocery item elements`);
+  diagnostics(`Strategy3: Found ${itemElements.length} grocery item elements`);
   
   if (itemElements.length === 0) return null;
 
@@ -456,7 +461,7 @@ async function extractItemsStrategy3(page: Page, header: OrderHeader, currency: 
       const seller = extractSellerFromText(containerText || '');
       const condition = extractConditionFromText(containerText || '');
 
-      debug(`Strategy3: Found grocery item: ${asin} - ${name.slice(0, 40)} - ${price.formatted} x${quantity}${seller ? ` - Seller: ${seller.name}` : ''}`);
+      diagnostics(`Strategy3: Found grocery item: ${asin} - ${name.slice(0, 40)} - ${price.formatted} x${quantity}${seller ? ` - Seller: ${seller.name}` : ''}`);
 
       items.push({
         id: asin || href,
@@ -472,7 +477,7 @@ async function extractItemsStrategy3(page: Page, header: OrderHeader, currency: 
         platformData: { orderType: 'grocery' },
       });
     } catch (e) {
-      debug(`Strategy3: Error: ${e}`);
+      diagnostics(`Strategy3: Error: ${e}`);
       continue;
     }
   }
@@ -484,9 +489,9 @@ async function extractItemsStrategy3(page: Page, header: OrderHeader, currency: 
  * Strategy 1 (AZAD): Digital orders
  * Finds "Ordered" text and goes up 3 ancestors
  */
-async function extractItemsStrategy1(page: Page, header: OrderHeader, currency: string): Promise<Item[] | null> {
+async function extractItemsStrategy1(page: Page, header: OrderHeader, currency: string, diagnostics: ItemDiagnostics): Promise<Item[] | null> {
   const containers = await page.locator('xpath=//*[contains(text(), "Ordered") or contains(text(), "Commandé")]/ancestor::*[3]').all();
-  debug(`Strategy1: Found ${containers.length} digital order containers`);
+  diagnostics(`Strategy1: Found ${containers.length} digital order containers`);
   
   if (containers.length === 0) return null;
 
@@ -511,7 +516,7 @@ async function extractItemsStrategy1(page: Page, header: OrderHeader, currency: 
       const seller = extractSellerFromText(containerText);
       const condition = extractConditionFromText(containerText);
 
-      debug(`Strategy1: Found digital item: ${asin} - ${name.slice(0, 40)}${seller ? ` - Seller: ${seller.name}` : ''}`);
+      diagnostics(`Strategy1: Found digital item: ${asin} - ${name.slice(0, 40)}${seller ? ` - Seller: ${seller.name}` : ''}`);
 
       items.push({
         id: asin || href,
@@ -527,7 +532,7 @@ async function extractItemsStrategy1(page: Page, header: OrderHeader, currency: 
         platformData: { orderType: 'digital' },
       });
     } catch (e) {
-      debug(`Strategy1: Error: ${e}`);
+      diagnostics(`Strategy1: Error: ${e}`);
       continue;
     }
   }
@@ -539,10 +544,10 @@ async function extractItemsStrategy1(page: Page, header: OrderHeader, currency: 
  * Strategy 5 (AZAD): Digital subscriptions (2025)
  * Uses digitalOrderSummaryContainer
  */
-async function extractItemsStrategy5(page: Page, header: OrderHeader, currency: string): Promise<Item[] | null> {
+async function extractItemsStrategy5(page: Page, header: OrderHeader, currency: string, diagnostics: ItemDiagnostics): Promise<Item[] | null> {
   const container = page.locator('#digitalOrderSummaryContainer');
   const isVisible = await container.isVisible().catch(() => false);
-  debug(`Strategy5: digitalOrderSummaryContainer visible: ${isVisible}`);
+  diagnostics(`Strategy5: digitalOrderSummaryContainer visible: ${isVisible}`);
   
   if (!isVisible) return null;
 
@@ -563,7 +568,7 @@ async function extractItemsStrategy5(page: Page, header: OrderHeader, currency: 
       const seller = extractSellerFromText(parentText || '');
       const condition = extractConditionFromText(parentText || '');
 
-      debug(`Strategy5: Found subscription item: ${asin} - ${name.slice(0, 40)}${seller ? ` - Seller: ${seller.name}` : ''}`);
+      diagnostics(`Strategy5: Found subscription item: ${asin} - ${name.slice(0, 40)}${seller ? ` - Seller: ${seller.name}` : ''}`);
 
       items.push({
         id: asin || href,
@@ -579,7 +584,7 @@ async function extractItemsStrategy5(page: Page, header: OrderHeader, currency: 
         platformData: { orderType: 'digital_subscription' },
       });
     } catch (e) {
-      debug(`Strategy5: Error: ${e}`);
+      diagnostics(`Strategy5: Error: ${e}`);
       continue;
     }
   }
@@ -592,40 +597,41 @@ async function extractItemsStrategy5(page: Page, header: OrderHeader, currency: 
  */
 export async function extractItems(
   page: Page,
-  header: OrderHeader
+  header: OrderHeader,
+  diagnostics: ItemDiagnostics = debug,
 ): Promise<Item[]> {
   const regionConfig = getRegionByCode(header.region);
   const currency = regionConfig?.currency || 'USD';
 
-  debug(`Starting item extraction for order ${header.id}`);
+  diagnostics(`Starting item extraction for order ${header.id}`);
 
   // Try strategies in priority order (matching AZAD)
   const strategies = [
-    { name: 'Strategy4 (2024+ data-component)', fn: () => extractDataComponentItems(page, header, currency) },
-    { name: 'Strategy0 (fixed-left-grid)', fn: () => extractItemsStrategy0(page, header, currency) },
-    { name: 'Strategy3 (grocery/fresh)', fn: () => extractItemsStrategy3(page, header, currency) },
-    { name: 'Strategy2 (2016 orderDetails)', fn: () => extractItemsStrategy2(page, header, currency) },
-    { name: 'Strategy5 (digital subscriptions)', fn: () => extractItemsStrategy5(page, header, currency) },
-    { name: 'Strategy1 (digital orders)', fn: () => extractItemsStrategy1(page, header, currency) },
+    { name: 'Strategy4 (2024+ data-component)', fn: () => extractDataComponentItems(page, header, currency, diagnostics) },
+    { name: 'Strategy0 (fixed-left-grid)', fn: () => extractItemsStrategy0(page, header, currency, diagnostics) },
+    { name: 'Strategy3 (grocery/fresh)', fn: () => extractItemsStrategy3(page, header, currency, diagnostics) },
+    { name: 'Strategy2 (2016 orderDetails)', fn: () => extractItemsStrategy2(page, header, currency, diagnostics) },
+    { name: 'Strategy5 (digital subscriptions)', fn: () => extractItemsStrategy5(page, header, currency, diagnostics) },
+    { name: 'Strategy1 (digital orders)', fn: () => extractItemsStrategy1(page, header, currency, diagnostics) },
   ];
 
   for (const strategy of strategies) {
     try {
-      debug(`Trying ${strategy.name}...`);
+      diagnostics(`Trying ${strategy.name}...`);
       const result = await Promise.race([
         strategy.fn(),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)) // 1s timeout per strategy
       ]);
       if (result && result.length > 0) {
-        debug(`${strategy.name} found ${result.length} items`);
+        diagnostics(`${strategy.name} found ${result.length} items`);
         return result;
       }
-      debug(`${strategy.name} returned no items`);
+      diagnostics(`${strategy.name} returned no items`);
     } catch (e) {
-      debug(`${strategy.name} failed: ${e}`);
+      diagnostics(`${strategy.name} failed: ${e}`);
     }
   }
 
-  debug(`No items found for order ${header.id}`);
+  diagnostics(`No items found for order ${header.id}`);
   return [];
 }
