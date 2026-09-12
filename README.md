@@ -9,6 +9,23 @@
 MCP (Model Context Protocol) server for downloading Amazon order history as CSV files.
 Supports orders, items, shipments, and transactions export across 16 Amazon regional sites.
 
+### Hardened Amazon.in POC JSON contract
+
+The Amazon.in POC keeps product lines in `items` and records only explicitly
+displayed, non-payment order-summary facts in `adjustments`. Each adjustment has
+a stable zero-based `adjustmentIndex`, a normalized type, its original safe
+display label, a signed INR amount, and `order-detail-summary` provenance.
+Shipping, fees, discounts/promotions, tax, and gift wrap are supported; item
+subtotal and order/grand total rows are structural and are not adjustments.
+
+Before any JSON destination is opened, every order must reconcile within ₹0.01:
+`sum(items.itemTotal) + sum(adjustments.amount) = orderTotal`. The exporter never
+creates a residual adjustment and fails closed with a payload-free error if an
+explicit adjustment is malformed or the equation does not balance. Payment,
+gift-card payment, address, recipient, contact, invoice, and tracking data stay
+outside this contract. Tests use synthetic fixtures only; contributors must not
+use live Amazon accounts for automated validation.
+
 ## Features
 
 - **4 Export Types**: Orders summary, item details, shipment tracking, payment transactions

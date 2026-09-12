@@ -13,6 +13,8 @@ export {
 
 // Order details extraction
 export { extractOrderDetails, extractOrderHeader } from "./order-details";
+export { extractOrderAdjustments, parseOrderSummaryAdjustments } from './order-adjustments';
+export type { AdjustmentType, OrderAdjustment } from './order-adjustments';
 
 // Item extraction
 export { extractItems } from "./items";
