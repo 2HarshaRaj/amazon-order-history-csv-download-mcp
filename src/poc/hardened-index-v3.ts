@@ -51,10 +51,10 @@ const PRIVATE_SUMMARY_LABEL =
   /(?:payment|card|bank|account|upi|cash|credit|debit|billing|gift[ -]?card|claim|recipient|address|phone|e-?mail|tracking|shipment|invoice|tax\s+id|gstin)/i;
 
 function adjustmentType(label: string): AdjustmentType {
-  if (/shipping|delivery/i.test(label)) return "shipping";
-  if (/marketplace\s+fee/i.test(label)) return "marketplace_fee";
   if (/discount/i.test(label)) return "discount";
   if (/promotion|promo/i.test(label)) return "promotion";
+  if (/shipping|delivery/i.test(label)) return "shipping";
+  if (/marketplace\s+fee/i.test(label)) return "marketplace_fee";
   if (/tax|gst|vat/i.test(label)) return "tax";
   if (/gift\s*wrap/i.test(label)) return "gift_wrap";
   return "other";

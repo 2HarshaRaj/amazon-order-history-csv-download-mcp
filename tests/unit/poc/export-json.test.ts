@@ -124,6 +124,24 @@ describe("POC JSON export contract", () => {
     ]);
   });
 
+  test("prioritizes reducing semantics in shipping and delivery labels", () => {
+    expect(
+      parseOrderSummaryAdjustments([
+        "Shipping Discount:  ₹10.00",
+        "Delivery Promotion:  ₹5.00",
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        type: "discount",
+        amount: expect.objectContaining({ amount: -10 }),
+      }),
+      expect.objectContaining({
+        type: "promotion",
+        amount: expect.objectContaining({ amount: -5 }),
+      }),
+    ]);
+  });
+
   test("rejects invalid adjustment amounts without exposing their payload", () => {
     expect(() =>
       parseOrderSummaryAdjustments(["Marketplace Fee:  unavailable-secret"]),
