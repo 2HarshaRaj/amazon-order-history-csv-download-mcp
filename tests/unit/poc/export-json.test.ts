@@ -71,9 +71,12 @@ describe("POC JSON export contract", () => {
     order.detail.items[0].unitPrice.amount = 199;
     order.detail.items[0].itemTotal.amount = 199;
     order.detail.adjustments = parseOrderSummaryAdjustments([
+      "Item(s) Subtotal:  ₹199.00",
       "Item Subtotal:  ₹199.00",
+      "Items Subtotal:  ₹199.00",
       "Shipping:  ₹0.00",
       "Marketplace Fee:  ₹5.00",
+      "Total:  ₹204.00",
       "Grand Total:  ₹204.00",
     ]);
     const first = createExportDocument(options, 1, [order], timestamp);

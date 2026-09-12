@@ -46,7 +46,7 @@ export interface OrderAdjustment {
 }
 
 const STRUCTURAL_TOTAL_LABEL =
-  /^(?:item\s+subtotal|subtotal|order\s+total|grand\s+total|total)\s*:?$/i;
+  /^(?:item(?:s|\(s\))?\s+subtotal|subtotal|order\s+total|grand\s+total|total)\s*:?$/i;
 const PRIVATE_SUMMARY_LABEL =
   /(?:payment|card|bank|account|upi|cash|credit|debit|billing|gift[ -]?card|claim|recipient|address|phone|e-?mail|tracking|shipment|invoice|tax\s+id|gstin)/i;
 
