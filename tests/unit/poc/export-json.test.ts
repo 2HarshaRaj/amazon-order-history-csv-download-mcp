@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { PocOrder, validatePocOrders, writePocOrdersJson } from '../../../src/poc/json-export';
+import { PocOrder, validatePocOrders, writePocOrdersJson } from '../../../src/poc/export-json';
 
 function order(overrides: Partial<PocOrder> = {}): PocOrder {
   return {
@@ -44,6 +44,19 @@ describe('POC JSON reconciliation', () => {
       adjustments: [{ adjustmentIndex: 0, type: 'promotion', label: 'Promotion', amount: -5,
         currency: 'INR', extractionSource: 'order-detail-summary' }],
     })])).not.toThrow();
+  });
+
+  test('accepts invoice-safe-fallback item provenance', () => {
+    const fallback = order();
+    fallback.items[0].extractionSource = 'invoice-safe-fallback';
+    expect(() => validatePocOrders([fallback])).not.toThrow();
+  });
+
+  test('uses an exact integer-paise tolerance', () => {
+    expect(() => validatePocOrders([order({ orderTotal: 204.01 })])).not.toThrow();
+    expect(() => validatePocOrders([order({ orderTotal: 204.02 })])).toThrow('reconciliation failed');
+    expect(() => validatePocOrders([order({ orderTotal: 204.014 })])).not.toThrow();
+    expect(() => validatePocOrders([order({ orderTotal: 204.015 })])).toThrow('reconciliation failed');
   });
 
   test('rejects non-contiguous or duplicate indexes', () => {

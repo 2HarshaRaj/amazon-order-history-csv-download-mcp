@@ -11,7 +11,7 @@ const itemSchema = z.object({
   unitPrice: z.number().finite().nonnegative(),
   itemTotal: z.number().finite(),
   currency: z.literal('INR'),
-  extractionSource: z.literal('order-detail'),
+  extractionSource: z.enum(['order-detail', 'invoice-safe-fallback']),
 });
 
 const adjustmentSchema = z.object({
@@ -36,6 +36,10 @@ export const pocOrderSchema = z.object({
 
 export type PocOrder = z.infer<typeof pocOrderSchema>;
 
+function toPaise(amount: number): number {
+  return Math.round(amount * 100);
+}
+
 export function validatePocOrders(orders: readonly PocOrder[]): void {
   for (const candidate of orders) {
     const result = pocOrderSchema.safeParse(candidate);
@@ -47,9 +51,10 @@ export function validatePocOrders(orders: readonly PocOrder[]): void {
     if (new Set(indexes).size !== indexes.length || indexes.some((value, index) => value !== index)) {
       throw new Error('Order adjustment indexes are invalid.');
     }
-    const calculated = order.items.reduce((sum, item) => sum + item.itemTotal, 0)
-      + order.adjustments.reduce((sum, adjustment) => sum + adjustment.amount, 0);
-    if (Math.round(Math.abs(calculated - order.orderTotal) * 100) > 1) {
+    const calculatedPaise = order.items.reduce((sum, item) => sum + toPaise(item.itemTotal), 0)
+      + order.adjustments.reduce((sum, adjustment) => sum + toPaise(adjustment.amount), 0);
+    const orderTotalPaise = toPaise(order.orderTotal);
+    if (Math.abs(calculatedPaise - orderTotalPaise) > 1) {
       throw new Error('Order reconciliation failed; no export was written.');
     }
   }
