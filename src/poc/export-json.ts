@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, rename, rm, writeFile } from "fs/promises";
+import { randomUUID } from "crypto";
 import { dirname, isAbsolute, relative, resolve, sep } from "path";
 import type { ItemDiagnostics } from "../amazon/extractors/items";
 
@@ -46,6 +47,23 @@ export interface JsonOrder {
   orderUrl: string;
   extractedAt: string;
   items: JsonItem[];
+  adjustments: JsonAdjustment[];
+}
+
+export interface JsonAdjustment {
+  adjustmentIndex: number;
+  type:
+    | "shipping"
+    | "marketplace_fee"
+    | "discount"
+    | "promotion"
+    | "tax"
+    | "gift_wrap"
+    | "other";
+  label: string;
+  amount: number;
+  currency: "INR";
+  extractionSource: "order-detail-summary";
 }
 
 export interface JsonExport {
@@ -169,6 +187,13 @@ function numericMoney(value: SafeMoney | undefined, label: string): number {
   return value.amount;
 }
 
+function adjustmentMoney(value: SafeMoney | undefined): number {
+  if (!value || value.currency !== CURRENCY || !Number.isFinite(value.amount)) {
+    throw new Error("Export validation failed: invalid order adjustment.");
+  }
+  return value.amount;
+}
+
 export function createExportDocument(
   options: Pick<CliOptions, "startDate" | "endDate">,
   pagesScanned: number,
@@ -216,6 +241,30 @@ export function createExportDocument(
       throw new Error(
         "Export validation failed: an order has no validated item lines.",
       );
+    const adjustments = detail.adjustments.map(
+      (adjustment, adjustmentIndex): JsonAdjustment => ({
+        adjustmentIndex,
+        type: adjustment.type,
+        label: adjustment.label,
+        amount: adjustmentMoney(adjustment.amount),
+        currency: CURRENCY,
+        extractionSource: adjustment.extractionSource,
+      }),
+    );
+    const itemsPaise = items.reduce(
+      (sum, item) => sum + Math.round(item.itemTotal * 100),
+      0,
+    );
+    const adjustmentsPaise = adjustments.reduce(
+      (sum, adjustment) => sum + Math.round(adjustment.amount * 100),
+      0,
+    );
+    const orderTotalPaise = Math.round(orderTotal * 100);
+    if (Math.abs(itemsPaise + adjustmentsPaise - orderTotalPaise) > 1) {
+      throw new Error(
+        "Export validation failed: an order does not reconcile within one paise.",
+      );
+    }
     return {
       orderId: summary.orderId,
       orderDate: summary.orderDate,
@@ -224,6 +273,7 @@ export function createExportDocument(
       orderUrl: `https://www.amazon.in/gp/your-account/order-details?orderID=${encodeURIComponent(summary.orderId)}`,
       extractedAt,
       items,
+      adjustments,
     };
   });
   return {
@@ -242,7 +292,14 @@ export async function writeExportFile(
 ): Promise<void> {
   const serialized = `${JSON.stringify(document, null, 2)}\n`;
   await mkdir(dirname(output), { recursive: true });
-  await writeFile(output, serialized, { encoding: "utf8", flag: "w" });
+  const temporary = `${output}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, serialized, { encoding: "utf8", flag: "wx" });
+    await rename(temporary, output);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function validateAndWriteExport(

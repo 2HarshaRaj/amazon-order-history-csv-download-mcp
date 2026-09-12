@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "fs/promises";
+import { mkdtemp, readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { tmpdir } from "os";
 import { join, win32 } from "path";
@@ -16,6 +16,7 @@ import {
 import {
   AuthenticationRequiredError,
   isAuthenticationRedirect,
+  parseOrderSummaryAdjustments,
 } from "../../../src/poc/hardened-index-v3";
 
 const timestamp = "2026-09-11T00:00:00.000Z";
@@ -32,6 +33,7 @@ function rawOrder(orderId: string, quantity = 2) {
       orderId,
       extractionSource: "order-detail",
       itemCount: 1,
+      adjustments: parseOrderSummaryAdjustments([]),
       items: [
         {
           asin: "B000000001",
@@ -63,6 +65,93 @@ describe("POC JSON export contract", () => {
     expect(typeof result.orders[0].items[0].unitPrice).toBe("number");
   });
 
+  test("emits explicit adjustments and reconciles item plus marketplace fee", () => {
+    const order = rawOrder("408-0000000-0000001", 1);
+    order.summary.orderTotal.amount = 204;
+    order.detail.items[0].unitPrice.amount = 199;
+    order.detail.items[0].itemTotal.amount = 199;
+    order.detail.adjustments = parseOrderSummaryAdjustments([
+      "Item Subtotal:  ₹199.00",
+      "Shipping:  ₹0.00",
+      "Marketplace Fee:  ₹5.00",
+      "Grand Total:  ₹204.00",
+    ]);
+    const first = createExportDocument(options, 1, [order], timestamp);
+    const second = createExportDocument(options, 1, [order], timestamp);
+    expect(first.orders[0].adjustments).toEqual([
+      expect.objectContaining({
+        adjustmentIndex: 0,
+        type: "shipping",
+        label: "Shipping",
+        amount: 0,
+      }),
+      expect.objectContaining({
+        adjustmentIndex: 1,
+        type: "marketplace_fee",
+        label: "Marketplace Fee",
+        amount: 5,
+      }),
+    ]);
+    expect(second.orders[0].adjustments).toEqual(first.orders[0].adjustments);
+  });
+
+  test("makes discounts and promotions negative while excluding totals and private rows", () => {
+    expect(
+      parseOrderSummaryAdjustments([
+        "Subtotal:  ₹220.00",
+        "Discount:  ₹10.00",
+        "Promotion Applied:  -₹5.00",
+        "Payment method:  Visa ending 0000",
+        "Gift card payment:  ₹2.00",
+        "Delivery address:  Sanitized Street",
+        "Tracking:  SANITIZED",
+        "Tax:  ₹1.00",
+        "Total:  ₹206.00",
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        type: "discount",
+        amount: expect.objectContaining({ amount: -10 }),
+      }),
+      expect.objectContaining({
+        type: "promotion",
+        amount: expect.objectContaining({ amount: -5 }),
+      }),
+      expect.objectContaining({
+        type: "tax",
+        amount: expect.objectContaining({ amount: 1 }),
+      }),
+    ]);
+  });
+
+  test("rejects invalid adjustment amounts without exposing their payload", () => {
+    expect(() =>
+      parseOrderSummaryAdjustments(["Marketplace Fee:  unavailable-secret"]),
+    ).toThrow("Order-summary adjustment validation failed.");
+  });
+
+  test("accepts invoice fallback provenance and exactly one paise variance", () => {
+    const order = rawOrder("408-0000000-0000001");
+    order.detail.extractionSource = "invoice-safe-fallback";
+    order.summary.orderTotal.amount = 200.01;
+    expect(
+      createExportDocument(options, 1, [order], timestamp).orders[0].items[0]
+        .extractionSource,
+    ).toBe("invoice-safe-fallback");
+  });
+
+  test("fails unexplained residual before replacing an existing destination", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "amazon-poc-test-"));
+    const output = join(directory, "orders.json");
+    await writeFile(output, "unchanged", "utf8");
+    const order = rawOrder("408-0000000-0000001");
+    order.summary.orderTotal.amount = 200.02;
+    await expect(
+      validateAndWriteExport(output, options, 1, [order], timestamp),
+    ).rejects.toThrow("does not reconcile within one paise");
+    expect(await readFile(output, "utf8")).toBe("unchanged");
+  });
+
   test("keeps Amazon OrderIDs separate and assigns stable deterministic line indexes", () => {
     const first = rawOrder("408-0000000-0000001");
     first.detail.items.push({
@@ -70,6 +159,7 @@ describe("POC JSON export contract", () => {
       asin: "",
       productName: "Second sanitized product",
     });
+    first.summary.orderTotal.amount = 400;
     const input = [first, rawOrder("408-0000000-0000002")];
     const runOne = createExportDocument(options, 1, input, timestamp);
     const runTwo = createExportDocument(options, 1, input, timestamp);
@@ -253,6 +343,7 @@ describe("POC CLI diagnostic privacy", () => {
       orderId: "408-1234567-7654321",
       asin: "B0PERSONAL1",
       productName: "Private product name",
+      adjustmentLabel: "Sanitized Marketplace Fee",
       price: "₹1,234.56",
     };
     const logs: string[] = [];
@@ -274,7 +365,7 @@ describe("POC CLI diagnostic privacy", () => {
           orders: [order.summary],
         }),
         extract: jest.fn().mockImplementation(async (_orderId, diagnostics) => {
-          const diagnostic = `[items] Found item ${personalPayload.asin} - ${personalPayload.productName} - ${personalPayload.price}; order ${personalPayload.orderId}`;
+          const diagnostic = `[items] Found item ${personalPayload.asin} - ${personalPayload.productName} - ${personalPayload.price}; adjustment ${personalPayload.adjustmentLabel}; order ${personalPayload.orderId}`;
           diagnosticMessages.push(diagnostic);
           diagnostics(diagnostic);
           return order.detail;
