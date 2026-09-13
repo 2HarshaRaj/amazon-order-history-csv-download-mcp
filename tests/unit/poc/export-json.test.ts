@@ -47,6 +47,39 @@ function rawOrder(orderId: string, quantity = 2) {
   };
 }
 
+function rawCancelledOrder(orderId: string) {
+  return {
+    summary: {
+      orderId,
+      orderDate: "2026-09-12",
+      orderTotal: undefined,
+      status: "cancelled" as const,
+      cancelledItems: [
+        {
+          asin: "B000000002",
+          productName: "Synthetic cancelled product",
+          quantity: 1,
+        },
+      ],
+    },
+    detail: {
+      orderId,
+      extractionSource: "cancelled-order-list",
+      itemCount: 1,
+      adjustments: [],
+      items: [
+        {
+          asin: "B000000002",
+          productName: "Synthetic cancelled product",
+          quantity: 1,
+          unitPrice: undefined,
+          itemTotal: undefined,
+        },
+      ],
+    },
+  };
+}
+
 describe("POC JSON export contract", () => {
   test("converts Money objects to numbers and retains quantity pricing semantics", () => {
     const result = createExportDocument(
@@ -159,6 +192,59 @@ describe("POC JSON export contract", () => {
       createExportDocument(options, 1, [order], timestamp).orders[0].items[0]
         .extractionSource,
     ).toBe("invoice-safe-fallback");
+  });
+
+  test("represents a confirmed unpriced cancellation with null monetary fields", () => {
+    const result = createExportDocument(
+      options,
+      1,
+      [rawCancelledOrder("408-0000000-0000002")],
+      timestamp,
+    );
+
+    expect(result.orders[0]).toMatchObject({
+      status: "cancelled",
+      orderTotal: null,
+      items: [
+        {
+          unitPrice: null,
+          itemTotal: null,
+        },
+      ],
+      adjustments: [],
+    });
+  });
+
+  test("does not admit unpriced records through the normal reconciliation path", () => {
+    const cancelled = rawCancelledOrder("408-0000000-0000002");
+    const notCancelled = {
+      ...cancelled,
+      summary: {
+        orderId: cancelled.summary.orderId,
+        orderDate: cancelled.summary.orderDate,
+        orderTotal: cancelled.summary.orderTotal,
+        cancelledItems: cancelled.summary.cancelledItems,
+      },
+    };
+    expect(() =>
+      createExportDocument(options, 1, [notCancelled], timestamp),
+    ).toThrow("order total");
+
+    const unpriced = rawCancelledOrder("408-0000000-0000002");
+    const pricedSummary = {
+      ...unpriced,
+      summary: {
+        ...unpriced.summary,
+        orderTotal: {
+          amount: 0,
+          currency: "INR",
+          formatted: "₹0.00",
+        },
+      },
+    };
+    expect(() =>
+      createExportDocument(options, 1, [pricedSummary], timestamp),
+    ).toThrow("unit price");
   });
 
   test("fails unexplained residual before replacing an existing destination", async () => {

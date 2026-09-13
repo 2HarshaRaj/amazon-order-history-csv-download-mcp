@@ -3,12 +3,13 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { chromium, BrowserContext, Page } from "playwright";
+import { chromium, BrowserContext, Locator, Page } from "playwright";
 import { homedir } from "os";
 import { join } from "path";
 
 import { extractDataComponentItems, extractItems, ItemDiagnostics } from "../amazon/extractors/items";
 import { getInvoiceUrl } from "../amazon/extractors/invoice";
+import { extractAsinFromUrl } from "../core/types/item";
 import { Money, parseMoney } from "../core/types/money";
 import { OrderHeader } from "../core/types/order";
 
@@ -22,12 +23,22 @@ const MAX_PAGES = 20;
 let browserContext: BrowserContext | null = null;
 let page: Page | null = null;
 
-type MinimalOrder = {
+export interface CancelledOrderListItem {
+  asin: string;
+  productName: string;
+  quantity: number;
+}
+
+export type MinimalOrder = {
   orderId: string;
   orderDate: string;
   orderDateKey: number;
   orderTotal?: ReturnType<typeof safeMoney>;
+  status?: "cancelled";
+  cancelledItems?: CancelledOrderListItem[];
 };
+
+export type ListedOrder = Omit<MinimalOrder, "orderDateKey">;
 
 export type AdjustmentType =
   | "shipping"
@@ -201,6 +212,36 @@ function parseOrderTotalFromText(text: string): Money | undefined {
   return rupee ? parseMoney(`₹${rupee[1]}`, CURRENCY) : undefined;
 }
 
+async function extractCancelledOrderListItems(
+  card: Locator,
+): Promise<CancelledOrderListItem[]> {
+  const links = await card
+    .locator('a[href*="/dp/"], a[href*="/gp/product/"]')
+    .all();
+  const dedupe = new Map<string, CancelledOrderListItem>();
+
+  for (const link of links) {
+    const productName = (await link.innerText().catch(() => "")).trim();
+    const href = await link.getAttribute("href").catch(() => null);
+    if (!productName || !href) continue;
+
+    const asin = extractAsinFromUrl(href);
+    if (!asin || dedupe.has(asin)) continue;
+
+    const row = link.locator(
+      "xpath=ancestor::*[contains(@class, 'a-fixed-left-grid')][1]",
+    );
+    const rowText = await row.innerText().catch(() => "");
+    const quantityText = rowText.match(/\b(?:qty|quantity)\s*:?\s*(\d+)\b/i);
+    const quantity = quantityText ? Number(quantityText[1]) : 1;
+    if (!Number.isInteger(quantity) || quantity < 1) continue;
+
+    dedupe.set(asin, { asin, productName, quantity });
+  }
+
+  return [...dedupe.values()];
+}
+
 async function getBrowserContext(): Promise<BrowserContext> {
   if (!browserContext) {
     browserContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
@@ -279,7 +320,9 @@ function directHeader(orderId: string): OrderHeader {
   };
 }
 
-async function parseCurrentOrderPage(targetPage: Page): Promise<MinimalOrder[]> {
+export async function parseCurrentOrderPage(
+  targetPage: Page,
+): Promise<MinimalOrder[]> {
   const cards = targetPage.locator(ORDER_CARD_SELECTOR);
   const count = await cards.count();
   const dedupe = new Map<string, MinimalOrder>();
@@ -292,11 +335,19 @@ async function parseCurrentOrderPage(targetPage: Page): Promise<MinimalOrder[]> 
     const orderDateKey = parseOrderDateFromText(text);
     if (!orderId || orderDateKey === null) continue;
 
+    // Fully cancelled legacy cards omit totals and data-component item markup,
+    // but retain paired image/title product links.
+    const cancelled = /\b(?:cancelled|canceled)\b/i.test(text);
+    const cancelledItems = cancelled
+      ? await extractCancelledOrderListItems(cards.nth(i))
+      : [];
     dedupe.set(orderId, {
       orderId,
       orderDate: keyToIso(orderDateKey),
       orderDateKey,
       orderTotal: safeMoney(parseOrderTotalFromText(text)),
+      status: cancelled ? "cancelled" : undefined,
+      cancelledItems: cancelled ? cancelledItems : undefined,
     });
   }
 
@@ -363,7 +414,44 @@ export async function listOrders(startDate: string, endDate: string, maxOrders: 
   };
 }
 
-export async function extractOrderItems(orderId: string, diagnostics?: ItemDiagnostics) {
+export function createCancelledOrderListDetail(
+  orderId: string,
+  listedOrder: ListedOrder | undefined,
+  cancellationConfirmed: boolean,
+  adjustments: OrderAdjustment[],
+) {
+  // Require independent list/detail cancellation signals and no monetary rows.
+  // The missing values remain missing; this does not synthesize a zero balance.
+  if (
+    !cancellationConfirmed ||
+    listedOrder?.status !== "cancelled" ||
+    listedOrder.orderTotal !== undefined ||
+    !listedOrder.cancelledItems?.length ||
+    adjustments.length !== 0
+  ) {
+    return null;
+  }
+
+  return {
+    orderId,
+    extractionSource: "cancelled-order-list",
+    itemCount: listedOrder.cancelledItems.length,
+    adjustments,
+    items: listedOrder.cancelledItems.map((item) => ({
+      asin: item.asin,
+      productName: item.productName,
+      quantity: item.quantity,
+      unitPrice: undefined,
+      itemTotal: undefined,
+    })),
+  };
+}
+
+export async function extractOrderItems(
+  orderId: string,
+  diagnostics?: ItemDiagnostics,
+  listedOrder?: ListedOrder,
+) {
   const targetPage = await getPage();
   await requireAuthentication(targetPage);
   const header = directHeader(orderId);
@@ -376,9 +464,26 @@ export async function extractOrderItems(orderId: string, diagnostics?: ItemDiagn
 
   // Capture the bounded order summary before invoice fallback can navigate away.
   const adjustments = await extractOrderSummaryAdjustments(targetPage);
+  const cancellationConfirmed =
+    listedOrder?.status === "cancelled" &&
+    (await targetPage
+      .locator(
+        '[data-component="cancelled"], [data-component="cancelledOrderBanner"]',
+      )
+      .count()
+      .catch(() => 0)) > 0;
 
   let items = await extractItems(targetPage, header, diagnostics).catch(() => []);
   let source = "order-detail";
+
+  const cancelledOrderListDetail = createCancelledOrderListDetail(
+    orderId,
+    listedOrder,
+    cancellationConfirmed,
+    adjustments,
+  );
+  if (items.length === 0 && cancelledOrderListDetail)
+    return cancelledOrderListDetail;
 
   if (items.length === 0) {
     await targetPage.goto(getInvoiceUrl(orderId, DOMAIN), {

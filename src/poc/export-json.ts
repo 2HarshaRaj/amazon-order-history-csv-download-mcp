@@ -33,8 +33,8 @@ export interface JsonItem {
   asin: string;
   productName: string;
   quantity: number;
-  unitPrice: number;
-  itemTotal: number;
+  unitPrice: number | null;
+  itemTotal: number | null;
   currency: "INR";
   extractionSource: string;
 }
@@ -42,8 +42,9 @@ export interface JsonItem {
 export interface JsonOrder {
   orderId: string;
   orderDate: string;
-  orderTotal: number;
+  orderTotal: number | null;
   currency: "INR";
+  status?: "cancelled";
   orderUrl: string;
   extractedAt: string;
   items: JsonItem[];
@@ -215,7 +216,20 @@ export function createExportDocument(
         "Export validation failed: missing or mismatched required order facts.",
       );
     }
-    const orderTotal = numericMoney(summary.orderTotal, "order total");
+    // Amazon publishes no monetary facts for this explicitly cancelled shape.
+    // Nulls represent unavailable values without bypassing normal reconciliation.
+    const cancelledWithoutMoney =
+      summary.status === "cancelled" &&
+      summary.orderTotal === undefined &&
+      detail.extractionSource === "cancelled-order-list" &&
+      detail.adjustments.length === 0 &&
+      detail.items.length > 0 &&
+      detail.items.every(
+        (item) => item.unitPrice === undefined && item.itemTotal === undefined,
+      );
+    const orderTotal = cancelledWithoutMoney
+      ? null
+      : numericMoney(summary.orderTotal, "order total");
     const items = detail.items.map((item, lineIndex): JsonItem => {
       if (
         !item.productName ||
@@ -231,8 +245,12 @@ export function createExportDocument(
         asin: item.asin ?? "",
         productName: item.productName,
         quantity: item.quantity,
-        unitPrice: numericMoney(item.unitPrice, "unit price"),
-        itemTotal: numericMoney(item.itemTotal, "item total"),
+        unitPrice: cancelledWithoutMoney
+          ? null
+          : numericMoney(item.unitPrice, "unit price"),
+        itemTotal: cancelledWithoutMoney
+          ? null
+          : numericMoney(item.itemTotal, "item total"),
         currency: CURRENCY,
         extractionSource: detail.extractionSource,
       };
@@ -251,25 +269,28 @@ export function createExportDocument(
         extractionSource: adjustment.extractionSource,
       }),
     );
-    const itemsPaise = items.reduce(
-      (sum, item) => sum + Math.round(item.itemTotal * 100),
-      0,
-    );
-    const adjustmentsPaise = adjustments.reduce(
-      (sum, adjustment) => sum + Math.round(adjustment.amount * 100),
-      0,
-    );
-    const orderTotalPaise = Math.round(orderTotal * 100);
-    if (Math.abs(itemsPaise + adjustmentsPaise - orderTotalPaise) > 1) {
-      throw new Error(
-        "Export validation failed: an order does not reconcile within one paise.",
+    if (!cancelledWithoutMoney) {
+      const itemsPaise = items.reduce(
+        (sum, item) => sum + Math.round((item.itemTotal as number) * 100),
+        0,
       );
+      const adjustmentsPaise = adjustments.reduce(
+        (sum, adjustment) => sum + Math.round(adjustment.amount * 100),
+        0,
+      );
+      const orderTotalPaise = Math.round((orderTotal as number) * 100);
+      if (Math.abs(itemsPaise + adjustmentsPaise - orderTotalPaise) > 1) {
+        throw new Error(
+          "Export validation failed: an order does not reconcile within one paise.",
+        );
+      }
     }
     return {
       orderId: summary.orderId,
       orderDate: summary.orderDate,
       orderTotal,
       currency: CURRENCY,
+      status: summary.status,
       orderUrl: `https://www.amazon.in/gp/your-account/order-details?orderID=${encodeURIComponent(summary.orderId)}`,
       extractedAt,
       items,
@@ -345,6 +366,7 @@ export async function runExport(
       detail: await dependencies.extract(
         summary.orderId,
         privacySafeItemDiagnostics,
+        summary,
       ),
     });
   const document = await dependencies.write(
