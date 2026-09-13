@@ -6,6 +6,11 @@
 import { chromium, Browser, Page } from "playwright";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { createExportDocument } from "../../src/poc/export-json";
+import {
+  createCancelledOrderListDetail,
+  parseCurrentOrderPage,
+} from "../../src/poc/hardened-index-v3";
 
 // Note: Integration tests require Playwright and are skipped in CI without browsers
 describe("order list extraction (integration)", () => {
@@ -102,6 +107,102 @@ describe("order list extraction (integration)", () => {
 
       // Check Subscribe & Save
       expect(dateText).toContain("Auto-delivered: Every 1 month");
+    });
+  });
+
+  describe("Amazon.in cancelled order parsing", () => {
+    it("exports an explicitly cancelled unpriced record without inventing monetary values", async () => {
+      if (!browser) return;
+
+      const fixtureHtml = readFileSync(
+        join(__dirname, "fixtures/order-card-in-cancelled.html"),
+        "utf-8",
+      );
+      await page.setContent(
+        `<!DOCTYPE html><html><body>${fixtureHtml}</body></html>`,
+      );
+
+      const [parsed] = await parseCurrentOrderPage(page);
+      expect(parsed).toMatchObject({
+        orderId: "408-0000000-0000002",
+        orderDate: "2026-09-12",
+        orderTotal: undefined,
+        status: "cancelled",
+        cancelledItems: [
+          {
+            asin: "B000000002",
+            productName: "Synthetic cancelled product",
+            quantity: 1,
+          },
+        ],
+      });
+
+      const cancellationConfirmed =
+        (await page
+          .locator(
+            '[data-component="cancelled"], [data-component="cancelledOrderBanner"]',
+          )
+          .count()) > 0;
+      const detail = createCancelledOrderListDetail(
+        parsed.orderId,
+        parsed,
+        cancellationConfirmed,
+        [],
+      );
+      expect(detail).not.toBeNull();
+
+      const summary = {
+        orderId: parsed.orderId,
+        orderDate: parsed.orderDate,
+        orderTotal: parsed.orderTotal,
+        status: parsed.status,
+        cancelledItems: parsed.cancelledItems,
+      };
+      const document = createExportDocument(
+        { startDate: "2026-09-12", endDate: "2026-09-12" },
+        1,
+        [{ summary, detail: detail! }],
+        "2026-09-12T00:00:00.000Z",
+      );
+      expect(document.orders[0]).toMatchObject({
+        status: "cancelled",
+        orderTotal: null,
+        items: [
+          {
+            productName: "Synthetic cancelled product",
+            unitPrice: null,
+            itemTotal: null,
+          },
+        ],
+        adjustments: [],
+      });
+    });
+
+    it("does not activate the fallback without confirmation or when adjustments exist", async () => {
+      if (!browser) return;
+
+      const fixtureHtml = readFileSync(
+        join(__dirname, "fixtures/order-card-in-cancelled.html"),
+        "utf-8",
+      );
+      await page.setContent(
+        `<!DOCTYPE html><html><body>${fixtureHtml}</body></html>`,
+      );
+      const [parsed] = await parseCurrentOrderPage(page);
+
+      expect(
+        createCancelledOrderListDetail(parsed.orderId, parsed, false, []),
+      ).toBeNull();
+      expect(
+        createCancelledOrderListDetail(parsed.orderId, parsed, true, [
+          {
+            type: "shipping",
+            label: "Synthetic shipping",
+            amount: { amount: 0, currency: "INR", formatted: "₹0.00" },
+            extractionSource: "order-detail-summary",
+          },
+        ]),
+      ).toBeNull();
     });
   });
 });
