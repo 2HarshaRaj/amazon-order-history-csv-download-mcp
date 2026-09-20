@@ -10,6 +10,7 @@ import { createExportDocument } from "../../src/poc/export-json";
 import {
   createCancelledOrderListDetail,
   parseCurrentOrderPage,
+  preferCancelledOrderListDetail,
 } from "../../src/poc/hardened-index-v3";
 
 // Note: Integration tests require Playwright and are skipped in CI without browsers
@@ -143,13 +144,38 @@ describe("order list extraction (integration)", () => {
             '[data-component="cancelled"], [data-component="cancelledOrderBanner"]',
           )
           .count()) > 0;
-      const detail = createCancelledOrderListDetail(
+      const cancelledDetail = createCancelledOrderListDetail(
         parsed.orderId,
         parsed,
         cancellationConfirmed,
         [],
       );
+      const pricedDetailItems = [
+        {
+          asin: "B000000099",
+          name: "Synthetic detail-page product",
+          quantity: 1,
+          unitPrice: { amount: 125, currency: "INR", formatted: "₹125.00" },
+          totalPrice: { amount: 125, currency: "INR", formatted: "₹125.00" },
+        },
+      ];
+      const detail = preferCancelledOrderListDetail(
+        cancelledDetail,
+        pricedDetailItems,
+      );
       expect(detail).not.toBeNull();
+      expect(detail).toMatchObject({
+        extractionSource: "cancelled-order-list",
+        items: [
+          {
+            asin: "B000000002",
+            productName: "Synthetic cancelled product",
+            quantity: 1,
+            unitPrice: undefined,
+            itemTotal: undefined,
+          },
+        ],
+      });
 
       const summary = {
         orderId: parsed.orderId,

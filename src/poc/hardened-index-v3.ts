@@ -447,6 +447,15 @@ export function createCancelledOrderListDetail(
   };
 }
 
+export function preferCancelledOrderListDetail<T>(
+  cancelledOrderListDetail: ReturnType<typeof createCancelledOrderListDetail>,
+  _pricedDetailItems: T[],
+): ReturnType<typeof createCancelledOrderListDetail> {
+  // Once all cancellation safeguards produced this representation, detail-page
+  // prices are not authoritative and must not displace the validated list data.
+  return cancelledOrderListDetail;
+}
+
 export async function extractOrderItems(
   orderId: string,
   diagnostics?: ItemDiagnostics,
@@ -482,8 +491,11 @@ export async function extractOrderItems(
     cancellationConfirmed,
     adjustments,
   );
-  if (items.length === 0 && cancelledOrderListDetail)
-    return cancelledOrderListDetail;
+  const preferredCancelledDetail = preferCancelledOrderListDetail(
+    cancelledOrderListDetail,
+    items,
+  );
+  if (preferredCancelledDetail) return preferredCancelledDetail;
 
   if (items.length === 0) {
     await targetPage.goto(getInvoiceUrl(orderId, DOMAIN), {

@@ -15,8 +15,10 @@ import {
 } from "../../../src/poc/export-json";
 import {
   AuthenticationRequiredError,
+  createCancelledOrderListDetail,
   isAuthenticationRedirect,
   parseOrderSummaryAdjustments,
+  preferCancelledOrderListDetail,
 } from "../../../src/poc/hardened-index-v3";
 
 const timestamp = "2026-09-11T00:00:00.000Z";
@@ -213,6 +215,50 @@ describe("POC JSON export contract", () => {
       ],
       adjustments: [],
     });
+  });
+
+  test("prefers validated cancelled list data over priced detail items", () => {
+    const cancelled = rawCancelledOrder("408-0000000-0000002");
+    const fallback = createCancelledOrderListDetail(
+      cancelled.summary.orderId,
+      cancelled.summary,
+      true,
+      [],
+    );
+    const selected = preferCancelledOrderListDetail(fallback, [
+      {
+        asin: "B000000099",
+        name: "Synthetic detail-page product",
+        quantity: 1,
+        unitPrice: { amount: 125, currency: "INR", formatted: "₹125.00" },
+        totalPrice: { amount: 125, currency: "INR", formatted: "₹125.00" },
+      },
+    ]);
+
+    expect(selected).toEqual(cancelled.detail);
+    expect(
+      createCancelledOrderListDetail(
+        cancelled.summary.orderId,
+        cancelled.summary,
+        false,
+        [],
+      ),
+    ).toBeNull();
+    expect(
+      createCancelledOrderListDetail(
+        cancelled.summary.orderId,
+        cancelled.summary,
+        true,
+        [
+          {
+            type: "shipping",
+            label: "Synthetic shipping",
+            amount: { amount: 0, currency: "INR", formatted: "₹0.00" },
+            extractionSource: "order-detail-summary",
+          },
+        ],
+      ),
+    ).toBeNull();
   });
 
   test("does not admit unpriced records through the normal reconciliation path", () => {
