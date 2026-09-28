@@ -133,6 +133,52 @@ describe("POC JSON export contract", () => {
     expect(second.orders[0].adjustments).toEqual(first.orders[0].adjustments);
   });
 
+  test("emits a positive Cash/Pay on Delivery fee and reconciles the order", () => {
+    const order = rawOrder("408-0000000-0000001", 1);
+    order.summary.orderTotal.amount = 205;
+    order.detail.items[0].unitPrice.amount = 200;
+    order.detail.items[0].itemTotal.amount = 200;
+    order.detail.adjustments = parseOrderSummaryAdjustments([
+      "Item(s) Subtotal:  ₹200.00",
+      "Shipping:  ₹0.00",
+      "Cash/Pay on Delivery fee:  ₹5.00",
+      "Total:  ₹205.00",
+      "Grand Total:  ₹205.00",
+    ]);
+
+    expect(
+      createExportDocument(options, 1, [order], timestamp).orders[0]
+        .adjustments,
+    ).toEqual([
+      expect.objectContaining({
+        type: "shipping",
+        label: "Shipping",
+        amount: 0,
+      }),
+      expect.objectContaining({
+        type: "other",
+        label: "Cash/Pay on Delivery fee",
+        amount: 5,
+      }),
+    ]);
+  });
+
+  test("excludes private payment labels even when they contain valid amounts", () => {
+    expect(
+      parseOrderSummaryAdjustments([
+        "Cash payment:  ₹1.00",
+        "Payment method:  ₹2.00",
+        "Card:  ₹3.00",
+        "UPI:  ₹4.00",
+        "Bank:  ₹5.00",
+        "Account:  ₹6.00",
+        "Credit:  ₹7.00",
+        "Debit:  ₹8.00",
+        "Billing details:  ₹9.00",
+      ]),
+    ).toEqual([]);
+  });
+
   test("makes discounts and promotions negative while excluding totals and private rows", () => {
     expect(
       parseOrderSummaryAdjustments([
