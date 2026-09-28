@@ -60,8 +60,11 @@ const STRUCTURAL_TOTAL_LABEL =
   /^(?:item(?:s|\(s\))?\s+subtotal|subtotal|order\s+total|grand\s+total|total)\s*:?$/i;
 const PRIVATE_SUMMARY_LABEL =
   /(?:payment|card|bank|account|upi|cash|credit|debit|billing|gift[ -]?card|claim|recipient|address|phone|e-?mail|tracking|shipment|invoice|tax\s+id|gstin)/i;
+const CASH_ON_DELIVERY_FEE_LABEL =
+  /^cash\s*\/\s*pay\s+on\s+delivery\s+fee$/i;
 
 function adjustmentType(label: string): AdjustmentType {
+  if (CASH_ON_DELIVERY_FEE_LABEL.test(label)) return "other";
   if (/discount/i.test(label)) return "discount";
   if (/promotion|promo/i.test(label)) return "promotion";
   if (/shipping|delivery/i.test(label)) return "shipping";
@@ -81,7 +84,11 @@ export function parseOrderSummaryAdjustments(
     const match = /^([^\n:]{1,80})\s*:?\s*(?:\n|\s{2,})(.+)$/s.exec(normalized);
     if (!match) continue;
     const label = match[1].trim();
-    if (STRUCTURAL_TOTAL_LABEL.test(label) || PRIVATE_SUMMARY_LABEL.test(label))
+    if (
+      STRUCTURAL_TOTAL_LABEL.test(label) ||
+      (PRIVATE_SUMMARY_LABEL.test(label) &&
+        !CASH_ON_DELIVERY_FEE_LABEL.test(label))
+    )
       continue;
 
     const type = adjustmentType(label);
