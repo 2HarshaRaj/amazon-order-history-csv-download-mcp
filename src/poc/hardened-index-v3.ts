@@ -13,6 +13,8 @@ import { extractAsinFromUrl } from "../core/types/item";
 import { Money, parseMoney } from "../core/types/money";
 import { OrderHeader } from "../core/types/order";
 
+import { DiagnosticError, FailureDiagnostics } from "./failure-diagnostics";
+
 const REGION = "in";
 const DOMAIN = "amazon.in";
 const CURRENCY = "INR";
@@ -77,9 +79,12 @@ function adjustmentType(label: string): AdjustmentType {
 /** Parse only label/amount rows already isolated inside the order-detail summary. */
 export function parseOrderSummaryAdjustments(
   rows: string[],
+  diagnostics?: FailureDiagnostics,
 ): OrderAdjustment[] {
+  diagnostics?.at("adjustments", "ADJUSTMENT_AMOUNT_INVALID");
   const adjustments: OrderAdjustment[] = [];
-  for (const row of rows) {
+  for (const [rowIndex, row] of rows.entries()) {
+    diagnostics?.adjustment(rowIndex);
     const normalized = row.replace(/\u00a0/g, " ").trim();
     const match = /^([^\n:]{1,80})\s*:?\s*(?:\n|\s{2,})(.+)$/s.exec(normalized);
     if (!match) continue;
@@ -97,10 +102,19 @@ export function parseOrderSummaryAdjustments(
       /^(-)?\s*(?:₹|INR\s*)\s*([\d,]+(?:\.\d{1,2})?)$/i,
     );
     if (!numeric) {
-      throw new Error("Order-summary adjustment validation failed.");
+      throw new DiagnosticError(
+        "adjustments",
+        "ADJUSTMENT_AMOUNT_INVALID",
+        "Order-summary adjustment validation failed.",
+      );
     }
     const parsed = parseMoney(`₹${numeric[2]}`, CURRENCY);
-    if (!parsed) throw new Error("Order-summary adjustment validation failed.");
+    if (!parsed)
+      throw new DiagnosticError(
+        "adjustments",
+        "ADJUSTMENT_AMOUNT_INVALID",
+        "Order-summary adjustment validation failed.",
+      );
     const reducesTotal =
       type === "discount" || type === "promotion" || numeric[1] === "-";
     const amount = {
@@ -113,20 +127,34 @@ export function parseOrderSummaryAdjustments(
       amount: safeMoney(amount),
       extractionSource: "order-detail-summary",
     });
+    diagnostics?.captureAdjustments(adjustments);
   }
   return adjustments;
 }
 
 async function extractOrderSummaryAdjustments(
   targetPage: Page,
+  diagnostics?: FailureDiagnostics,
 ): Promise<OrderAdjustment[]> {
+  diagnostics?.at("adjustments", "ADJUSTMENT_READ_FAILED");
   const summary = targetPage.locator("#od-subtotals").first();
-  if ((await summary.count().catch(() => 0)) === 0) return [];
+  if (
+    (await summary.count().catch((error: unknown) => {
+      diagnostics?.noteFailure("adjustments", "ADJUSTMENT_READ_FAILED", error);
+      return 0;
+    })) === 0
+  ) {
+    diagnostics?.note("adjustments", "SUMMARY_SELECTOR_MISSING");
+    return [];
+  }
   const rows = await summary
     .locator(".a-row")
     .allInnerTexts()
-    .catch(() => []);
-  return parseOrderSummaryAdjustments(rows);
+    .catch((error: unknown) => {
+      diagnostics?.noteFailure("adjustments", "ADJUSTMENT_READ_FAILED", error);
+      return [];
+    });
+  return parseOrderSummaryAdjustments(rows, diagnostics);
 }
 
 const MONTHS: Record<string, number> = {
@@ -249,8 +277,11 @@ async function extractCancelledOrderListItems(
   return [...dedupe.values()];
 }
 
-async function getBrowserContext(): Promise<BrowserContext> {
+async function getBrowserContext(
+  diagnostics?: FailureDiagnostics,
+): Promise<BrowserContext> {
   if (!browserContext) {
+    diagnostics?.at("browser", "BROWSER_OPEN_FAILED");
     browserContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
       headless: false,
       viewport: { width: 1280, height: 800 },
@@ -260,11 +291,12 @@ async function getBrowserContext(): Promise<BrowserContext> {
       page = null;
     });
   }
+  diagnostics?.browserVersion(browserContext.browser()?.version());
   return browserContext;
 }
 
-async function getPage(): Promise<Page> {
-  const context = await getBrowserContext();
+async function getPage(diagnostics?: FailureDiagnostics): Promise<Page> {
+  const context = await getBrowserContext(diagnostics);
   if (!page || page.isClosed()) {
     const pages = context.pages();
     page = pages[0] || (await context.newPage());
@@ -371,33 +403,53 @@ async function getNextPageUrl(targetPage: Page): Promise<string | null> {
   return new URL(href, targetPage.url()).toString();
 }
 
-export async function listOrders(startDate: string, endDate: string, maxOrders: number) {
+export async function listOrders(
+  startDate: string,
+  endDate: string,
+  maxOrders: number,
+  diagnostics?: FailureDiagnostics,
+) {
   const startKey = parseInputDate(startDate);
   const endKey = parseInputDate(endDate);
-  if (startKey > endKey) throw new Error("start_date must be on or before end_date.");
+  if (startKey > endKey)
+    throw new Error("start_date must be on or before end_date.");
 
   const year = Math.trunc(endKey / 10000);
   if (Math.trunc(startKey / 10000) !== year) {
-    throw new Error("POC currently supports a date range within one calendar year.");
+    throw new DiagnosticError(
+      "list",
+      "DATE_RANGE_UNSUPPORTED",
+      "POC currently supports a date range within one calendar year.",
+    );
   }
 
-  const targetPage = await getPage();
+  const targetPage = await getPage(diagnostics);
+  diagnostics?.at("list", "LIST_NAVIGATION_FAILED");
   await requireAuthentication(targetPage);
 
-  let url: string | null = `https://www.${DOMAIN}/your-orders/orders?timeFilter=year-${year}&language=en_GB`;
+  let url: string | null =
+    `https://www.${DOMAIN}/your-orders/orders?timeFilter=year-${year}&language=en_GB`;
   const matches: MinimalOrder[] = [];
   let pagesScanned = 0;
 
   while (url && pagesScanned < MAX_PAGES && matches.length < maxOrders) {
-    await targetPage.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+    diagnostics?.at("list", "LIST_NAVIGATION_FAILED");
+    await targetPage.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 15000,
+    });
     await requireAuthentication(targetPage);
+    diagnostics?.at("list", "LIST_SELECTOR_MISSING");
     await targetPage.waitForSelector(ORDER_CARD_SELECTOR, { timeout: 3000 });
+    diagnostics?.at("list", "LIST_FACTS_MISSING");
 
     const pageOrders = await parseCurrentOrderPage(targetPage);
     pagesScanned += 1;
 
     if (pageOrders.length === 0) {
-      throw new Error(
+      throw new DiagnosticError(
+        "list",
+        "LIST_FACTS_MISSING",
         `Found order cards on page ${pagesScanned} but could not parse any order IDs/dates. Stop rather than scanning the whole year.`,
       );
     }
@@ -409,7 +461,10 @@ export async function listOrders(startDate: string, endDate: string, maxOrders: 
       }
     }
 
-    const oldestKey = Math.min(...pageOrders.map((order) => order.orderDateKey));
+    diagnostics?.listed(matches, pagesScanned);
+    const oldestKey = Math.min(
+      ...pageOrders.map((order) => order.orderDateKey),
+    );
     if (oldestKey < startKey || matches.length >= maxOrders) break;
 
     url = await getNextPageUrl(targetPage);
@@ -467,19 +522,31 @@ export async function extractOrderItems(
   orderId: string,
   diagnostics?: ItemDiagnostics,
   listedOrder?: ListedOrder,
+  trace?: FailureDiagnostics,
 ) {
-  const targetPage = await getPage();
+  const targetPage = await getPage(trace);
+  trace?.at("detail", "DETAIL_NAVIGATION_FAILED");
   await requireAuthentication(targetPage);
   const header = directHeader(orderId);
 
-  await targetPage.goto(header.detailUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+  await targetPage.goto(header.detailUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 15000,
+  });
   await requireAuthentication(targetPage);
+  trace?.at("detail", "DETAIL_SELECTOR_MISSING");
   await targetPage
-    .waitForSelector('[data-component="purchasedItems"], .a-box, #od-subtotals', { timeout: 2500 })
-    .catch(() => {});
+    .waitForSelector(
+      '[data-component="purchasedItems"], .a-box, #od-subtotals',
+      { timeout: 2500 },
+    )
+    .catch((error: unknown) => {
+      trace?.noteFailure("detail", "DETAIL_SELECTOR_MISSING", error);
+    });
 
   // Capture the bounded order summary before invoice fallback can navigate away.
-  const adjustments = await extractOrderSummaryAdjustments(targetPage);
+  const adjustments = await extractOrderSummaryAdjustments(targetPage, trace);
+  trace?.captureAdjustments(adjustments);
   const cancellationConfirmed =
     listedOrder?.status === "cancelled" &&
     (await targetPage
@@ -489,7 +556,22 @@ export async function extractOrderItems(
       .count()
       .catch(() => 0)) > 0;
 
-  let items = await extractItems(targetPage, header, diagnostics).catch(() => []);
+  trace?.provenance("order-detail");
+  trace?.at("items", "ITEM_EXTRACTION_FAILED");
+  let items = await extractItems(targetPage, header, diagnostics).catch((error: unknown) => {
+    trace?.noteFailure("items", "ITEM_EXTRACTION_FAILED", error);
+    return [];
+  });
+  trace?.captureItems(
+    items.map((item) => ({
+      asin: item.asin,
+      productName: item.name,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      itemTotal: item.totalPrice,
+    })),
+  );
+  if (!items.length) trace?.note("items", "ITEMS_EMPTY");
   let source = "order-detail";
 
   const cancelledOrderListDetail = createCancelledOrderListDetail(
@@ -502,21 +584,44 @@ export async function extractOrderItems(
     cancelledOrderListDetail,
     items,
   );
-  if (preferredCancelledDetail) return preferredCancelledDetail;
+  if (preferredCancelledDetail) {
+    trace?.note("items", "CANCELLED_LIST_USED");
+    trace?.detail(preferredCancelledDetail);
+    return preferredCancelledDetail;
+  }
 
   if (items.length === 0) {
+    trace?.provenance("invoice-safe-fallback");
+    trace?.at("invoice", "INVOICE_NAVIGATION_FAILED");
     await targetPage.goto(getInvoiceUrl(orderId, DOMAIN), {
       waitUntil: "domcontentloaded",
       timeout: 12000,
     });
     await requireAuthentication(targetPage);
+    trace?.at("invoice", "INVOICE_SELECTOR_MISSING");
     await targetPage
-      .waitForSelector('[data-component="purchasedItems"], table', { timeout: 2000 })
-      .catch(() => {});
-    const invoiceItems = await extractDataComponentItems(targetPage, header, CURRENCY, diagnostics).catch(() => null);
+      .waitForSelector('[data-component="purchasedItems"], table', {
+        timeout: 2000,
+      })
+      .catch((error: unknown) => {
+        trace?.noteFailure("invoice", "INVOICE_SELECTOR_MISSING", error);
+      });
+    trace?.at("invoice", "INVOICE_EXTRACTION_FAILED");
+    const invoiceItems = await extractDataComponentItems(
+      targetPage,
+      header,
+      CURRENCY,
+      diagnostics,
+    ).catch((error: unknown) => {
+      trace?.noteFailure("invoice", "INVOICE_EXTRACTION_FAILED", error);
+      return null;
+    });
     if (invoiceItems && invoiceItems.length > 0) {
       items = invoiceItems;
       source = "invoice-safe-fallback";
+      trace?.note("invoice", "INVOICE_FALLBACK_USED");
+    } else {
+      trace?.note("invoice", "INVOICE_ITEMS_EMPTY");
     }
   }
 
