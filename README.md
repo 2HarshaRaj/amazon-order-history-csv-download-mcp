@@ -113,6 +113,9 @@ Gross purchase totals come only from visible `Total`, `Order Total`, or
 `order-info`, or `data-component="orderHeader"`). Visible header totals must agree.
 Missing, invalid, or conflicting totals stop the export with safe
 `LIST_TOTAL_MISSING`, `LIST_TOTAL_INVALID`, or `LIST_TOTAL_AMBIGUOUS` diagnostics.
+An explicit `Order Total` or `Grand Total` declaration with an unreadable or
+unsupported value is invalid even alongside a valid total or on a cancelled
+order; it cannot activate the unpriced-cancellation fallback.
 Unrecognized header layouts require a parser update; there is no fallback to the
 first price, a subtotal, or a payment component. The existing independently
 confirmed unpriced-cancellation representation remains available.

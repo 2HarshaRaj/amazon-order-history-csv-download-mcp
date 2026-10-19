@@ -9,8 +9,10 @@ const HEADER_SELECTOR =
   '.order-header, .order-info, [data-component="orderHeader"]';
 const EXCLUDED_CONTEXT =
   '[data-component="purchasedItems"], [data-component="viewPaymentPlanSummaryWidget"], [data-component="paymentSummary"], .a-popover, .a-popover-content, [role="dialog"], [aria-hidden="true"]';
+// Explicit gross-total labels declare a total even when their value is unreadable.
+// Keep bare "Total" scoped so unrelated labels such as "Total orders" stay ignored.
 const TOTAL_CANDIDATE =
-  /^(?:(?:order|grand)\s+)?total(?:\s*:|\s*(?:₹|INR\b)|\s*$)/i;
+  /^(?:(?:order|grand)\s+total\b|total(?:\s*:|\s*(?:₹|INR\b)|\s*$))/i;
 const PAIR =
   /^(?:(?:order|grand)\s+)?total\s*:?\s*(?:₹|INR\s*)\s*((?:\d+|\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})*,\d{3})(?:\.\d{1,2})?)$/i;
 const totalText = z.string().max(200);
