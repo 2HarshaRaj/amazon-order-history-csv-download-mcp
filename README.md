@@ -159,7 +159,11 @@ report is not written. Do not relax permissions to make reporting work.
 On each export, reports aged 30 days are removed, with a maximum of 50 managed
 files at 128 KiB each (6.25 MiB total). Reports cap item/adjustment lines at 100
 and technical events/timings at 200; `truncated` flags omitted evidence. The
-writer uses exclusive temporary files and atomic rename. Cleanup only handles
+writer validates the complete report against a strict recursive runtime allowlist
+before touching the filesystem; unexpected fields or unsafe values reject the
+report. It uses exclusive temporary files and atomic rename. Capacity eviction
+of valid reports happens only after a new report is published, so a failed
+write or rename preserves existing valid evidence. Cleanup only handles
 recognized report filenames, skips links and directories, and removes abandoned
 temporary files after an hour. Expiry runs when the exporter runs, not as a
 background service. To delete evidence sooner, stop the exporter, open the

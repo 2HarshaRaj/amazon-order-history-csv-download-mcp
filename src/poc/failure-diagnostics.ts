@@ -31,51 +31,56 @@ const MAX_LINES = 100;
 const REPORT_NAME =
   /^failure-(\d{13})-([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.json(?:\.tmp)?$/;
 
-export type FailureStage =
-  | "browser"
-  | "list"
-  | "detail"
-  | "adjustments"
-  | "items"
-  | "invoice"
-  | "validation"
-  | "reconciliation"
-  | "output";
-export type ReasonCode =
-  | "BROWSER_OPEN_FAILED"
-  | "LIST_NAVIGATION_FAILED"
-  | "LIST_SELECTOR_MISSING"
-  | "LIST_FACTS_MISSING"
-  | "DATE_RANGE_UNSUPPORTED"
-  | "DETAIL_NAVIGATION_FAILED"
-  | "DETAIL_SELECTOR_MISSING"
-  | "ADJUSTMENT_READ_FAILED"
-  | "ADJUSTMENT_AMOUNT_INVALID"
-  | "SUMMARY_SELECTOR_MISSING"
-  | "ITEM_EXTRACTION_FAILED"
-  | "ITEMS_EMPTY"
-  | "ITEM_ROW_FAILED"
-  | "ITEM_SHAPE_AMBIGUOUS"
-  | "ITEM_CONTAINERS"
-  | "STRATEGY_STARTED"
-  | "STRATEGY_EMPTY"
-  | "STRATEGY_FOUND"
-  | "STRATEGY_FAILED"
-  | "INVOICE_NAVIGATION_FAILED"
-  | "INVOICE_SELECTOR_MISSING"
-  | "INVOICE_EXTRACTION_FAILED"
-  | "INVOICE_ITEMS_EMPTY"
-  | "INVOICE_FALLBACK_USED"
-  | "CANCELLED_LIST_USED"
-  | "EXPORT_METADATA_INVALID"
-  | "ORDER_FACTS_INVALID"
-  | "ITEM_FACTS_INVALID"
-  | "ORDER_TOTAL_INVALID"
-  | "UNIT_PRICE_INVALID"
-  | "ITEM_TOTAL_INVALID"
-  | "TOTAL_MISMATCH"
-  | "OUTPUT_WRITE_FAILED"
-  | "AUTHENTICATION_REQUIRED";
+const failureStageSchema = z.enum([
+  "browser",
+  "list",
+  "detail",
+  "adjustments",
+  "items",
+  "invoice",
+  "validation",
+  "reconciliation",
+  "output",
+]);
+export type FailureStage = z.infer<typeof failureStageSchema>;
+
+const reasonCodeSchema = z.enum([
+  "BROWSER_OPEN_FAILED",
+  "LIST_NAVIGATION_FAILED",
+  "LIST_SELECTOR_MISSING",
+  "LIST_FACTS_MISSING",
+  "DATE_RANGE_UNSUPPORTED",
+  "DETAIL_NAVIGATION_FAILED",
+  "DETAIL_SELECTOR_MISSING",
+  "ADJUSTMENT_READ_FAILED",
+  "ADJUSTMENT_AMOUNT_INVALID",
+  "SUMMARY_SELECTOR_MISSING",
+  "ITEM_EXTRACTION_FAILED",
+  "ITEMS_EMPTY",
+  "ITEM_ROW_FAILED",
+  "ITEM_SHAPE_AMBIGUOUS",
+  "ITEM_CONTAINERS",
+  "STRATEGY_STARTED",
+  "STRATEGY_EMPTY",
+  "STRATEGY_FOUND",
+  "STRATEGY_FAILED",
+  "INVOICE_NAVIGATION_FAILED",
+  "INVOICE_SELECTOR_MISSING",
+  "INVOICE_EXTRACTION_FAILED",
+  "INVOICE_ITEMS_EMPTY",
+  "INVOICE_FALLBACK_USED",
+  "CANCELLED_LIST_USED",
+  "EXPORT_METADATA_INVALID",
+  "ORDER_FACTS_INVALID",
+  "ITEM_FACTS_INVALID",
+  "ORDER_TOTAL_INVALID",
+  "UNIT_PRICE_INVALID",
+  "ITEM_TOTAL_INVALID",
+  "TOTAL_MISMATCH",
+  "OUTPUT_WRITE_FAILED",
+  "AUTHENTICATION_REQUIRED",
+]);
+export type ReasonCode = z.infer<typeof reasonCodeSchema>;
 
 type MoneyFact = { amount: number; currency: string } | undefined;
 interface ItemFacts {
@@ -221,6 +226,193 @@ const diagnosticTitle = z
       ),
   );
 
+const ORDER_ID =
+  /^(?:\d{3}-\d{7}-\d{7}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i;
+const ADJUSTMENT_LABEL =
+  /^(?:(?:shipping|delivery)(?: (?:charge|fee|discount|promotion))?s?|marketplace fee|discount|promotion(?: applied)?|tax|gst|vat|gift wrap|cash\s*\/\s*pay on delivery fee)$/i;
+const extractionSourceSchema = z.enum([
+  "order-detail",
+  "invoice-safe-fallback",
+  "cancelled-order-list",
+  "order-detail-summary",
+]);
+const categorySchema = z.enum([
+  "authentication",
+  "validation",
+  "timeout",
+  "filesystem-permission",
+  "storage-full",
+  "filesystem-path",
+  "operation-failed",
+]);
+const paiseSchema = z.number().int().safe();
+const countSchema = paiseSchema.nonnegative();
+const orderIndexSchema = countSchema.max(49);
+const versionSchema = z
+  .string()
+  .max(64)
+  .regex(
+    /^v?\d+\.\d+\.\d+(?:-(?:alpha|beta|rc|next|nightly|pre|canary)[\d.a-f-]*)?$/,
+  );
+const summaryEvidenceSchema = z
+  .object({
+    orderId: z.string().max(36).regex(ORDER_ID).optional(),
+    orderDate: z
+      .string()
+      .max(10)
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .refine((value) => {
+        const parsed = new Date(`${value}T00:00:00.000Z`);
+        return (
+          Number.isFinite(parsed.getTime()) &&
+          parsed.toISOString().slice(0, 10) === value
+        );
+      })
+      .optional(),
+    status: z.literal("cancelled").optional(),
+    orderTotalPaise: paiseSchema.optional(),
+    currency: z.literal("INR"),
+  })
+  .strict();
+
+/** Independently validate every serializable field, including all nested objects.
+ * Parsing creates a fresh data-only tree; caller properties/JSON hooks are never
+ * passed through. Unknown keys and unsafe values reject the entire report. */
+const failureReportSchema: z.ZodType<FailureReport> = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: z.string().max(36).uuid(),
+    timestamp: z.string().max(40).datetime({ offset: true }),
+    failure: z
+      .object({
+        stage: failureStageSchema,
+        reason: reasonCodeSchema,
+        category: categorySchema,
+      })
+      .strict(),
+    runtime: z
+      .object({
+        node: versionSchema,
+        playwright: versionSchema,
+        chromium: z
+          .string()
+          .max(64)
+          .regex(/^\d+(?:\.\d+){1,3}$/)
+          .optional(),
+      })
+      .strict(),
+    counts: z
+      .object({
+        pagesScanned: countSchema.max(20),
+        selectedOrders: countSchema.max(50),
+        items: countSchema,
+        adjustments: countSchema,
+      })
+      .strict(),
+    selectedOrders: z.array(summaryEvidenceSchema).max(50),
+    order: summaryEvidenceSchema
+      .extend({ orderIndex: orderIndexSchema })
+      .strict()
+      .optional(),
+    lineIndex: countSchema.optional(),
+    adjustmentIndex: countSchema.optional(),
+    items: z
+      .array(
+        z
+          .object({
+            lineIndex: countSchema,
+            asin: z
+              .string()
+              .max(10)
+              .regex(/^[A-Z0-9]{10}$/)
+              .optional(),
+            productName: z
+              .string()
+              .refine((value) => value === value.trim())
+              .pipe(diagnosticTitle)
+              .optional(),
+            quantity: countSchema.positive().optional(),
+            unitPricePaise: paiseSchema.optional(),
+            itemTotalPaise: paiseSchema.optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_LINES),
+    adjustments: z
+      .array(
+        z
+          .object({
+            adjustmentIndex: countSchema,
+            type: z
+              .enum([
+                "shipping",
+                "marketplace_fee",
+                "discount",
+                "promotion",
+                "tax",
+                "gift_wrap",
+                "other",
+              ])
+              .optional(),
+            label: z
+              .string()
+              .max(80)
+              .regex(ADJUSTMENT_LABEL)
+              .refine((value) =>
+                [...value].every((character) => {
+                  const code = character.charCodeAt(0);
+                  return code >= 32 && code !== 127;
+                }),
+              )
+              .optional(),
+            amountPaise: paiseSchema.optional(),
+            extractionSource: extractionSourceSchema.optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_LINES),
+    extractionSource: extractionSourceSchema.optional(),
+    reconciliation: z
+      .object({
+        itemsPaise: paiseSchema,
+        adjustmentsPaise: paiseSchema,
+        expectedPaise: paiseSchema,
+        actualPaise: paiseSchema,
+        differencePaise: paiseSchema,
+        tolerancePaise: z.literal(1),
+      })
+      .strict()
+      .optional(),
+    events: z
+      .array(
+        z
+          .object({
+            stage: failureStageSchema,
+            reason: reasonCodeSchema,
+            elapsedMs: countSchema,
+            orderIndex: orderIndexSchema.optional(),
+            count: countSchema.optional(),
+            strategyIndex: countSchema.max(5).optional(),
+            category: categorySchema.optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_EVENTS),
+    timings: z
+      .array(
+        z
+          .object({
+            stage: failureStageSchema,
+            durationMs: countSchema,
+            orderIndex: orderIndexSchema.optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_EVENTS),
+    truncated: z.boolean(),
+  })
+  .strict();
+
 function paise(money: MoneyFact): number | undefined {
   const result = diagnosticMoney.safeParse(money);
   if (!result.success) return undefined;
@@ -247,12 +439,7 @@ function source(value: string): string | undefined {
 
 function summaryFacts(summary: SummaryFacts): SummaryEvidence {
   return {
-    orderId:
-      /^(?:\d{3}-\d{7}-\d{7}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(
-        summary.orderId,
-      )
-        ? summary.orderId
-        : undefined,
+    orderId: ORDER_ID.test(summary.orderId) ? summary.orderId : undefined,
     orderDate: /^\d{4}-\d{2}-\d{2}$/.test(summary.orderDate)
       ? summary.orderDate
       : undefined,
@@ -292,12 +479,9 @@ function adjustmentFacts(
     ? adjustment.type
     : undefined;
   // Unknown summary labels can contain contact/payment data. Only retain known fee labels.
-  const label =
-    /^(?:(?:shipping|delivery)(?: (?:charge|fee|discount|promotion))?s?|marketplace fee|discount|promotion(?: applied)?|tax|gst|vat|gift wrap|cash\s*\/\s*pay on delivery fee)$/i.test(
-      adjustment.label,
-    )
-      ? adjustment.label
-      : undefined;
+  const label = ADJUSTMENT_LABEL.test(adjustment.label)
+    ? adjustment.label
+    : undefined;
   return {
     adjustmentIndex,
     type: allowedType,
@@ -596,7 +780,7 @@ async function privateDirectory(directory: string): Promise<string> {
 async function cleanupDirectory(
   directory: string,
   now: number,
-  reserve: number,
+  enforceCapacity: boolean,
 ): Promise<void> {
   const retained: Array<{ name: string; time: number; size: number }> = [];
   for (const name of await readdir(directory)) {
@@ -621,8 +805,9 @@ async function cleanupDirectory(
       await unlink(path);
     else retained.push({ name, time, size: info.size });
   }
+  if (!enforceCapacity) return;
   retained.sort((a, b) => b.time - a.time || b.name.localeCompare(a.name));
-  for (const entry of retained.slice(Math.max(0, MAX_REPORTS - reserve)))
+  for (const entry of retained.slice(MAX_REPORTS))
     await unlink(join(directory, entry.name));
 }
 
@@ -630,15 +815,21 @@ export async function cleanupFailureReports(
   directory = DIAGNOSTIC_DIRECTORY,
   now = Date.now(),
 ): Promise<void> {
-  await cleanupDirectory(await privateDirectory(directory), now, 0);
+  await cleanupDirectory(await privateDirectory(directory), now, true);
 }
 
 export async function writeFailureReport(
-  report: FailureReport,
+  report: unknown,
   directory = DIAGNOSTIC_DIRECTORY,
   now = Date.now(),
 ): Promise<void> {
-  const bounded = { ...report };
+  let bounded: FailureReport;
+  try {
+    bounded = failureReportSchema.parse(report);
+  } catch {
+    // Zod errors may include attacker-controlled keys/values. Never expose them.
+    throw new Error("Diagnostic report failed safety validation.");
+  }
   let serialized = `${JSON.stringify(bounded, null, 2)}\n`;
   while (Buffer.byteLength(serialized, "utf8") > MAX_REPORT_BYTES) {
     bounded.truncated = true;
@@ -673,7 +864,9 @@ export async function writeFailureReport(
       throw new Error("Diagnostic report exceeds size bound.");
   }
   const root = await privateDirectory(directory);
-  await cleanupDirectory(root, now, 1);
+  // Expiry/invalid-file cleanup is safe before publication. Valid reports must
+  // not be evicted until the replacement has been atomically published.
+  await cleanupDirectory(root, now, false);
   const output = join(root, `failure-${now}-${randomUUID()}.json`);
   const temporary = `${output}.tmp`;
   try {
@@ -691,7 +884,7 @@ export async function writeFailureReport(
       await file.close();
     }
     await rename(temporary, output);
-    await cleanupDirectory(root, now, 0);
+    await cleanupDirectory(root, now, true);
   } finally {
     await unlink(temporary).catch(() => {});
   }

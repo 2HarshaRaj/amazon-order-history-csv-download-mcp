@@ -306,6 +306,52 @@ describe("hardened POC failure diagnostics pipeline", () => {
     },
   );
 
+  test.each(["root", "nested"])(
+    "a rejected %s report cannot obscure the export error or leak data",
+    async (location) => {
+      fakeBrowser("detail");
+      await writeFile(output, "prior complete export");
+      await expect(
+        runExport(
+          {
+            startDate: "2026-10-01",
+            endDate: "2026-10-02",
+            maxOrders: 1,
+            output,
+          },
+          (message) => logs.push(message),
+          {
+            list: listOrders,
+            extract: extractOrderItems,
+            write: validateAndWriteExport,
+            report: (evidence) =>
+              writeFailureReport(
+                location === "root"
+                  ? { ...evidence, cookie: "PRIVATE_BOUNDARY_COOKIE" }
+                  : {
+                      ...evidence,
+                      order: {
+                        ...evidence.order,
+                        recipient: "PRIVATE_BOUNDARY_RECIPIENT",
+                      },
+                    },
+                reports,
+              ),
+          },
+        ),
+      ).rejects.toBe(privateError);
+      expect(await readFile(output, "utf8")).toBe("prior complete export");
+      expect(existsSync(reports)).toBe(false);
+      expect(logs.join("\n")).toContain(
+        "stage=detail; code=DETAIL_NAVIGATION_FAILED",
+      );
+      expect(logs.join("\n")).toContain("report unavailable");
+      expect(logs.join("\n")).not.toMatch(
+        /PRIVATE_|cookie|123456|buyer@upi|408-|notebook|stack|recipient/,
+      );
+    },
+  );
+
   test("report and browser-close errors cannot obscure the original failure or replace a prior export", async () => {
     fakeBrowser("detail");
     await writeFile(output, "prior complete export");

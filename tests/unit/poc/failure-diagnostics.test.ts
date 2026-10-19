@@ -19,6 +19,7 @@ import {
   cleanupFailureReports,
   DiagnosticError,
   FailureDiagnostics,
+  FailureReport,
   MAX_REPORT_BYTES,
   MAX_REPORTS,
   RETENTION_MS,
@@ -60,6 +61,29 @@ const options = { startDate: "2026-10-01", endDate: "2026-10-02" };
 
 function report() {
   return new FailureDiagnostics().report(new Error("NEVER STORE THIS"));
+}
+
+function completeReport(): FailureReport {
+  const trace = new FailureDiagnostics();
+  trace.listed([summary], 1);
+  trace.select(summary, 0);
+  trace.detail(detail);
+  trace.item(0);
+  trace.adjustment(0);
+  trace.note("items", "ITEM_ROW_FAILED");
+  trace.reconcile(20000, 1000, 21002);
+  return trace.report(undefined);
+}
+
+function injectField(path: Array<string | number>, value: unknown): unknown {
+  const input: unknown = JSON.parse(JSON.stringify(completeReport()));
+  let target = input as Record<string, unknown>;
+  for (const key of path.slice(0, -1))
+    target = target[key] as Record<string, unknown>;
+  const lastKey = path[path.length - 1];
+  if (lastKey === undefined) throw new Error("Missing synthetic field path.");
+  target[lastKey] = value;
+  return input;
 }
 
 describe("allowlisted failure evidence", () => {
@@ -292,6 +316,147 @@ describe("owner-local report store", () => {
     }
   });
 
+  test("round-trips every allowlisted nested report shape", async () => {
+    const evidence = completeReport();
+    await writeFailureReport(evidence, directory);
+    const path = join(directory, (await readdir(directory))[0]);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(
+      JSON.parse(JSON.stringify(evidence)),
+    );
+  });
+
+  test.each(["recipient", "payment", "cookie", "stack"])(
+    "rejects an unexpected root %s before filesystem work",
+    async (key) => {
+      const root = join(directory, "not-created");
+      await expect(
+        writeFailureReport(
+          injectField([key], "PRIVATE_BOUNDARY_PAYLOAD"),
+          root,
+        ),
+      ).rejects.toThrow("Diagnostic report failed safety validation.");
+      expect(existsSync(root)).toBe(false);
+    },
+  );
+
+  const nestedPaths: Array<[string, Array<string | number>]> = [
+    ["failure", ["failure"]],
+    ["runtime", ["runtime"]],
+    ["counts", ["counts"]],
+    ["selected order", ["selectedOrders", 0]],
+    ["current order", ["order"]],
+    ["item", ["items", 0]],
+    ["adjustment", ["adjustments", 0]],
+    ["event", ["events", 0]],
+    ["timing", ["timings", 0]],
+    ["reconciliation", ["reconciliation"]],
+  ];
+  test.each(nestedPaths)(
+    "rejects an unexpected sensitive field in %s",
+    async (_label, path) => {
+      await expect(
+        writeFailureReport(
+          injectField([...path, "cookie"], "PRIVATE_NESTED_PAYLOAD"),
+          directory,
+        ),
+      ).rejects.toThrow("Diagnostic report failed safety validation.");
+      expect(await readdir(directory)).toEqual([]);
+    },
+  );
+
+  const unsafeValues: Array<[string, Array<string | number>, unknown]> = [
+    ["stage", ["failure", "stage"], "PRIVATE_COOKIE"],
+    ["reason", ["failure", "reason"], "PRIVATE_EXCEPTION"],
+    ["category", ["failure", "category"], "PRIVATE_EXCEPTION"],
+    ["Node version", ["runtime", "node"], "v20.0.0 cookie=PRIVATE_COOKIE"],
+    [
+      "Playwright version",
+      ["runtime", "playwright"],
+      "https://example.invalid/?token=PRIVATE_TOKEN",
+    ],
+    ["Chromium version", ["runtime", "chromium"], "PRIVATE_PATH"],
+    ["order ID", ["order", "orderId"], "PRIVATE_RECIPIENT"],
+    ["date", ["selectedOrders", 0, "orderDate"], "2026-02-30"],
+    ["item HTML", ["items", 0, "productName"], "<b>PRIVATE_HTML</b>"],
+    ["item UPI", ["items", 0, "productName"], "synthetic@upi"],
+    ["item card", ["items", 0, "productName"], "4111.1111.1111.1111"],
+    ["item OTP", ["items", 0, "productName"], "OTP 123456"],
+    [
+      "item control character",
+      ["items", 0, "productName"],
+      "\nSynthetic notebook",
+    ],
+    ["ASIN", ["items", 0, "asin"], "PRIVATE_ASIN"],
+    ["adjustment label", ["adjustments", 0, "label"], "Card: PRIVATE_CARD"],
+    [
+      "adjustment source",
+      ["adjustments", 0, "extractionSource"],
+      "PRIVATE_SOURCE",
+    ],
+    ["source", ["extractionSource"], "PRIVATE_SOURCE"],
+    ["event reason", ["events", 0, "reason"], "PRIVATE_STACK"],
+    ["fractional paise", ["items", 0, "itemTotalPaise"], 1.5],
+    ["non-finite discrepancy", ["reconciliation", "differencePaise"], Infinity],
+    ["unsafe count", ["counts", "items"], Number.MAX_SAFE_INTEGER + 1],
+  ];
+  test.each(unsafeValues)(
+    "rejects an injected unsafe %s without exposing its value",
+    async (_label, path, value) => {
+      let failure: unknown;
+      try {
+        await writeFailureReport(injectField(path, value), directory);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe(
+        "Diagnostic report failed safety validation.",
+      );
+      expect(await readdir(directory)).toEqual([]);
+    },
+  );
+
+  test.each([
+    "selectedOrders",
+    "items",
+    "adjustments",
+    "events",
+    "timings",
+  ] as const)("rejects unbounded %s arrays", async (key) => {
+    const evidence = completeReport();
+    const limit =
+      key === "selectedOrders"
+        ? 50
+        : key === "events" || key === "timings"
+          ? 200
+          : 100;
+    await expect(
+      writeFailureReport(
+        {
+          ...evidence,
+          [key]: Array.from({ length: limit + 1 }, () => evidence[key][0]),
+        },
+        directory,
+      ),
+    ).rejects.toThrow("Diagnostic report failed safety validation.");
+    expect(await readdir(directory)).toEqual([]);
+  });
+
+  test.each([
+    ["root", []],
+    ["item", ["items", 0]],
+  ] as Array<[string, Array<string | number>]>)(
+    "rejects %s JSON hooks before serialization",
+    async (_label, path) => {
+      const toJSON = jest.fn(() => ({ cookie: "PRIVATE_JSON_HOOK" }));
+      await expect(
+        writeFailureReport(injectField([...path, "toJSON"], toJSON), directory),
+      ).rejects.toThrow("Diagnostic report failed safety validation.");
+      expect(toJSON).not.toHaveBeenCalled();
+      expect(await readdir(directory)).toEqual([]);
+    },
+  );
+
   test("expires 30-day reports by creation time, caps count, and preserves unrelated files/links/directories", async () => {
     const now = Date.now();
     const expired = filename(now - RETENTION_MS);
@@ -348,17 +513,51 @@ describe("owner-local report store", () => {
   });
 
   test("shrinks oversized evidence while preserving the failing line and reconciliation", async () => {
-    const trace = new FailureDiagnostics();
-    trace.select(summary, 0);
-    trace.detail(detail);
-    trace.item(0);
-    trace.reconcile(20000, 1000, 21002);
-    const evidence = trace.report(undefined);
-    evidence.events = Array.from({ length: 3000 }, () => ({
-      stage: "items" as const,
-      reason: "ITEM_ROW_FAILED" as const,
-      elapsedMs: 1,
+    const evidence = completeReport();
+    evidence.items = Array.from({ length: 100 }, (_, index) =>
+      index === 0
+        ? evidence.items[0]
+        : {
+            lineIndex: index,
+            asin: "B000000001",
+            productName: `Synthetic ${"X".repeat(285)}`,
+            quantity: 1,
+            unitPricePaise: 0,
+            itemTotalPaise: 0,
+          },
+    );
+    evidence.adjustments = Array.from({ length: 100 }, (_, index) => ({
+      ...evidence.adjustments[0],
+      adjustmentIndex: index,
+      amountPaise: index === 0 ? 1000 : 0,
     }));
+    evidence.selectedOrders = Array.from(
+      { length: 50 },
+      () => evidence.selectedOrders[0],
+    );
+    evidence.counts = {
+      pagesScanned: 1,
+      items: 100,
+      adjustments: 100,
+      selectedOrders: 50,
+    };
+    evidence.events = Array.from({ length: 200 }, () => ({
+      stage: "items",
+      reason: "ITEM_ROW_FAILED",
+      elapsedMs: 1234567890,
+      count: 1234567890,
+      orderIndex: 0,
+      strategyIndex: 4,
+      category: "operation-failed",
+    }));
+    evidence.timings = Array.from({ length: 200 }, () => ({
+      stage: "items",
+      durationMs: 1234567890,
+      orderIndex: 0,
+    }));
+    expect(
+      Buffer.byteLength(JSON.stringify(evidence, null, 2), "utf8"),
+    ).toBeGreaterThan(MAX_REPORT_BYTES);
     await writeFailureReport(evidence, directory);
     const path = join(directory, (await readdir(directory))[0]);
     expect((await stat(path)).size).toBeLessThanOrEqual(MAX_REPORT_BYTES);
@@ -379,6 +578,83 @@ describe("owner-local report store", () => {
       expect(await readdir(directory)).toEqual([]);
     } finally {
       rename.mockRestore();
+    }
+  });
+
+  test.each(["open", "rename"] as const)(
+    "preserves all valid reports at capacity when publication fails at %s",
+    async (operation) => {
+      const now = Date.now();
+      const previous = new Map(
+        Array.from({ length: MAX_REPORTS }, (_, index) => [
+          filename(now - index - 1),
+          JSON.stringify(report()),
+        ]),
+      );
+      await Promise.all(
+        [...previous].map(([name, contents]) =>
+          writeFile(join(directory, name), contents),
+        ),
+      );
+      const expired = filename(now - RETENTION_MS);
+      const oversized = filename(now);
+      await writeFile(join(directory, expired), "expired");
+      await writeFile(
+        join(directory, oversized),
+        Buffer.alloc(MAX_REPORT_BYTES + 1),
+      );
+      const failure = new Error("synthetic publication failure");
+      const publish =
+        operation === "open"
+          ? jest.spyOn(files, "open").mockRejectedValue(failure)
+          : jest.spyOn(files, "rename").mockRejectedValue(failure);
+      try {
+        await expect(
+          writeFailureReport(completeReport(), directory, now),
+        ).rejects.toBe(failure);
+        expect((await readdir(directory)).sort()).toEqual(
+          [...previous.keys()].sort(),
+        );
+        for (const [name, contents] of previous)
+          expect(await readFile(join(directory, name), "utf8")).toBe(contents);
+      } finally {
+        publish.mockRestore();
+      }
+    },
+  );
+
+  test("evicts the oldest valid report only after a replacement is published", async () => {
+    const now = Date.now();
+    const previous = Array.from({ length: MAX_REPORTS }, (_, index) =>
+      filename(now - index - 1),
+    );
+    await Promise.all(
+      previous.map((name) =>
+        writeFile(join(directory, name), JSON.stringify(report())),
+      ),
+    );
+    const realRename = files.rename;
+    const publish = jest
+      .spyOn(files, "rename")
+      .mockImplementation(async (from, to) => {
+        expect(
+          (await readdir(directory))
+            .filter((name) => name.endsWith(".json"))
+            .sort(),
+        ).toEqual([...previous].sort());
+        await realRename(from, to);
+      });
+    try {
+      await writeFailureReport(completeReport(), directory, now);
+      const names = await readdir(directory);
+      expect(names).toHaveLength(MAX_REPORTS);
+      expect(names.filter((name) => !previous.includes(name))).toHaveLength(1);
+      expect(existsSync(join(directory, previous[previous.length - 1]))).toBe(
+        false,
+      );
+      for (const name of previous.slice(0, -1)) expect(names).toContain(name);
+    } finally {
+      publish.mockRestore();
     }
   });
 
