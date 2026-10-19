@@ -108,6 +108,21 @@ zero-based `lineIndex`, optional/empty ASIN, product name, numeric quantity,
 numeric unit and line totals, `INR`, and its safe extraction source. The export
 fails closed before file creation if a required fact is absent or invalid.
 
+Gross purchase totals come only from visible `Total`, `Order Total`, or
+`Grand Total` label/value pairs in recognized order-card headers (`order-header`,
+`order-info`, or `data-component="orderHeader"`). Visible header totals must agree.
+Missing, invalid, or conflicting totals stop the export with safe
+`LIST_TOTAL_MISSING`, `LIST_TOTAL_INVALID`, or `LIST_TOTAL_AMBIGUOUS` diagnostics.
+Unrecognized header layouts require a parser update; there is no fallback to the
+first price, a subtotal, or a payment component. The existing independently
+confirmed unpriced-cancellation representation remains available.
+
+Purchase totals and tender sources are distinct: vouchers and gift-card balances
+fund an order; they are not inferred discounts or additional purchases. Neither
+payment sums nor item/fee sums can substitute for an independently extracted
+gross total. Reconciliation still requires items plus explicit adjustments to
+match that gross total within one paise before atomic output publication.
+
 This local JSON contract excludes recipient names, addresses, payment/card and
 gift-card data, tracking data, invoice contents, and browser session data. It
 does not upload data or integrate with Google Sheets, Fold, or any consumer
