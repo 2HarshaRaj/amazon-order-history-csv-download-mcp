@@ -3,7 +3,14 @@
 import { mkdir, rename, rm, writeFile } from "fs/promises";
 import { randomUUID } from "crypto";
 import { dirname, isAbsolute, relative, resolve, sep } from "path";
-import type { ItemDiagnostics } from "../amazon/extractors/items";
+import {
+  cleanupFailureReports,
+  DiagnosticError,
+  FailureDiagnostics,
+  FailureReport,
+  safeFailureMessage,
+  writeFailureReport,
+} from "./failure-diagnostics";
 
 import {
   AuthenticationRequiredError,
@@ -81,6 +88,8 @@ interface ExportRunDependencies {
   list: typeof listOrders;
   extract: typeof extractOrderItems;
   write: typeof validateAndWriteExport;
+  report?: (report: FailureReport) => Promise<void>;
+  cleanup?: () => Promise<void>;
 }
 
 interface OutputPathOperations {
@@ -93,15 +102,15 @@ interface OutputPathOperations {
 const AUTH_REQUIRED_MESSAGE =
   "Amazon.in login required. Complete sign-in/OTP in the visible dedicated Chromium window, then rerun the command. The browser has been left open.";
 
-/** Discard extractor diagnostics because they can contain personal order data. */
-export const privacySafeItemDiagnostics: ItemDiagnostics = () => {};
+/** Only fixed, locally authored option messages may reach stderr. */
+class CliOptionsError extends Error {}
 
 function optionValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name);
   if (index < 0) return undefined;
   const value = argv[index + 1];
   if (!value || value.startsWith("--"))
-    throw new Error(`${name} requires a value.`);
+    throw new CliOptionsError(`${name} requires a value.`);
   return value;
 }
 
@@ -117,30 +126,42 @@ export function parseCliOptions(
   ]);
   for (let index = 0; index < argv.length; index += 2) {
     if (!known.has(argv[index]))
-      throw new Error(`Unknown argument: ${argv[index] ?? "(missing)"}.`);
+      throw new CliOptionsError(
+        "Unknown argument. Use --start-date, --end-date, --max-orders, and --output.",
+      );
   }
 
   const startDate = optionValue(argv, "--start-date");
   const endDate = optionValue(argv, "--end-date");
   const outputArg = optionValue(argv, "--output");
   if (!startDate || !endDate)
-    throw new Error(
+    throw new CliOptionsError(
       "Both --start-date and --end-date are required (YYYY-MM-DD).",
     );
   if (!outputArg)
-    throw new Error(
+    throw new CliOptionsError(
       "--output is required and must point outside the repository.",
     );
-  const startKey = parseInputDate(startDate);
-  const endKey = parseInputDate(endDate);
+  let startKey: number;
+  let endKey: number;
+  try {
+    startKey = parseInputDate(startDate);
+    endKey = parseInputDate(endDate);
+  } catch {
+    throw new CliOptionsError(
+      "Dates must be valid calendar dates in YYYY-MM-DD format.",
+    );
+  }
   if (startKey > endKey)
-    throw new Error("--start-date must be on or before --end-date.");
+    throw new CliOptionsError("--start-date must be on or before --end-date.");
 
   const maxText = optionValue(argv, "--max-orders");
   const maxOrders =
     maxText === undefined ? DEFAULT_MAX_ORDERS : Number(maxText);
   if (!Number.isInteger(maxOrders) || maxOrders < 1 || maxOrders > MAX_ORDERS) {
-    throw new Error("--max-orders must be an integer from 1 through 50.");
+    throw new CliOptionsError(
+      "--max-orders must be an integer from 1 through 50.",
+    );
   }
 
   const output = validateOutputPath(outputArg, repositoryRoot);
@@ -167,21 +188,30 @@ export function validateOutputPath(
       !fromRoot.startsWith(`..${pathOperations.sep}`) &&
       !pathOperations.isAbsolute(fromRoot))
   ) {
-    throw new Error(
+    throw new CliOptionsError(
       "--output must be an absolute path outside the repository.",
     );
   }
   return output;
 }
 
-function numericMoney(value: SafeMoney | undefined, label: string): number {
+function numericMoney(
+  value: SafeMoney | undefined,
+  label: "order total" | "unit price" | "item total",
+): number {
   if (
     !value ||
     value.currency !== CURRENCY ||
     !Number.isFinite(value.amount) ||
     value.amount < 0
   ) {
-    throw new Error(
+    throw new DiagnosticError(
+      "validation",
+      label === "order total"
+        ? "ORDER_TOTAL_INVALID"
+        : label === "unit price"
+          ? "UNIT_PRICE_INVALID"
+          : "ITEM_TOTAL_INVALID",
       `Export validation failed: ${label} must be a non-negative numeric INR amount.`,
     );
   }
@@ -190,7 +220,11 @@ function numericMoney(value: SafeMoney | undefined, label: string): number {
 
 function adjustmentMoney(value: SafeMoney | undefined): number {
   if (!value || value.currency !== CURRENCY || !Number.isFinite(value.amount)) {
-    throw new Error("Export validation failed: invalid order adjustment.");
+    throw new DiagnosticError(
+      "adjustments",
+      "ADJUSTMENT_AMOUNT_INVALID",
+      "Export validation failed: invalid order adjustment.",
+    );
   }
   return value.amount;
 }
@@ -200,19 +234,35 @@ export function createExportDocument(
   pagesScanned: number,
   orders: Array<{ summary: ListedOrder; detail: ExtractedItems }>,
   extractedAt: string,
+  diagnostics?: FailureDiagnostics,
 ): JsonExport {
+  diagnostics?.at("validation", "EXPORT_METADATA_INVALID");
   if (!Number.isInteger(pagesScanned) || pagesScanned < 0)
-    throw new Error("Export validation failed: invalid page count.");
+    throw new DiagnosticError(
+      "validation",
+      "EXPORT_METADATA_INVALID",
+      "Export validation failed: invalid page count.",
+    );
   if (Number.isNaN(Date.parse(extractedAt)))
-    throw new Error("Export validation failed: invalid extraction timestamp.");
+    throw new DiagnosticError(
+      "validation",
+      "EXPORT_METADATA_INVALID",
+      "Export validation failed: invalid extraction timestamp.",
+    );
 
-  const jsonOrders = orders.map(({ summary, detail }): JsonOrder => {
+  const jsonOrders = orders.map((order, orderIndex): JsonOrder => {
+    const { summary, detail } = order;
+    diagnostics?.select(summary, orderIndex);
+    diagnostics?.detail(detail);
+    diagnostics?.at("validation", "ORDER_FACTS_INVALID");
     if (
       !summary.orderId ||
       !summary.orderDate ||
       detail.orderId !== summary.orderId
     ) {
-      throw new Error(
+      throw new DiagnosticError(
+        "validation",
+        "ORDER_FACTS_INVALID",
         "Export validation failed: missing or mismatched required order facts.",
       );
     }
@@ -231,12 +281,15 @@ export function createExportDocument(
       ? null
       : numericMoney(summary.orderTotal, "order total");
     const items = detail.items.map((item, lineIndex): JsonItem => {
+      diagnostics?.item(lineIndex);
       if (
         !item.productName ||
         !Number.isInteger(item.quantity) ||
         item.quantity < 1
       ) {
-        throw new Error(
+        throw new DiagnosticError(
+          "validation",
+          "ITEM_FACTS_INVALID",
           "Export validation failed: invalid required item facts.",
         );
       }
@@ -256,18 +309,23 @@ export function createExportDocument(
       };
     });
     if (items.length === 0)
-      throw new Error(
+      throw new DiagnosticError(
+        "items",
+        "ITEMS_EMPTY",
         "Export validation failed: an order has no validated item lines.",
       );
     const adjustments = detail.adjustments.map(
-      (adjustment, adjustmentIndex): JsonAdjustment => ({
-        adjustmentIndex,
-        type: adjustment.type,
-        label: adjustment.label,
-        amount: adjustmentMoney(adjustment.amount),
-        currency: CURRENCY,
-        extractionSource: adjustment.extractionSource,
-      }),
+      (adjustment, adjustmentIndex): JsonAdjustment => {
+        diagnostics?.adjustment(adjustmentIndex);
+        return {
+          adjustmentIndex,
+          type: adjustment.type,
+          label: adjustment.label,
+          amount: adjustmentMoney(adjustment.amount),
+          currency: CURRENCY,
+          extractionSource: adjustment.extractionSource,
+        };
+      },
     );
     if (!cancelledWithoutMoney) {
       const itemsPaise = items.reduce(
@@ -279,8 +337,11 @@ export function createExportDocument(
         0,
       );
       const orderTotalPaise = Math.round((orderTotal as number) * 100);
+      diagnostics?.reconcile(itemsPaise, adjustmentsPaise, orderTotalPaise);
       if (Math.abs(itemsPaise + adjustmentsPaise - orderTotalPaise) > 1) {
-        throw new Error(
+        throw new DiagnosticError(
+          "reconciliation",
+          "TOTAL_MISMATCH",
           "Export validation failed: an order does not reconcile within one paise.",
         );
       }
@@ -329,6 +390,7 @@ export async function validateAndWriteExport(
   pagesScanned: number,
   orders: Array<{ summary: ListedOrder; detail: ExtractedItems }>,
   extractedAt: string,
+  diagnostics?: FailureDiagnostics,
 ): Promise<JsonExport> {
   // Build and validate the complete payload before creating a directory or file.
   const document = createExportDocument(
@@ -336,7 +398,9 @@ export async function validateAndWriteExport(
     pagesScanned,
     orders,
     extractedAt,
+    diagnostics,
   );
+  diagnostics?.at("output", "OUTPUT_WRITE_FAILED");
   await writeExportFile(output, document);
   return document;
 }
@@ -350,35 +414,72 @@ export async function runExport(
     write: validateAndWriteExport,
   },
 ): Promise<void> {
-  log("Starting bounded Amazon.in export in the visible Chromium window.");
-  const listed = await dependencies.list(
-    options.startDate,
-    options.endDate,
-    options.maxOrders,
-  );
-  log(
-    `Inspected ${listed.pagesScanned} order-list page(s); validating ${listed.orders.length} order(s).`,
-  );
-  const combined: Array<{ summary: ListedOrder; detail: ExtractedItems }> = [];
-  for (const summary of listed.orders)
-    combined.push({
-      summary,
-      detail: await dependencies.extract(
+  const diagnostics = new FailureDiagnostics();
+  try {
+    log("Starting bounded Amazon.in export in the visible Chromium window.");
+    diagnostics.at("list", "LIST_NAVIGATION_FAILED");
+    const listed = await dependencies.list(
+      options.startDate,
+      options.endDate,
+      options.maxOrders,
+      diagnostics,
+    );
+    diagnostics.listed(listed.orders, listed.pagesScanned);
+    log(
+      `Inspected ${listed.pagesScanned} order-list page(s); validating ${listed.orders.length} order(s).`,
+    );
+    const combined: Array<{ summary: ListedOrder; detail: ExtractedItems }> =
+      [];
+    for (const [orderIndex, summary] of listed.orders.entries()) {
+      diagnostics.select(summary, orderIndex);
+      diagnostics.at("detail", "DETAIL_NAVIGATION_FAILED");
+      const detail = await dependencies.extract(
         summary.orderId,
-        privacySafeItemDiagnostics,
+        diagnostics.itemDiagnostics,
         summary,
-      ),
-    });
-  const document = await dependencies.write(
-    options.output,
-    options,
-    listed.pagesScanned,
-    combined,
-    new Date().toISOString(),
-  );
-  log(
-    `Export complete: wrote ${document.orders.length} order(s) to the requested local file.`,
-  );
+        diagnostics,
+      );
+      diagnostics.detail(detail);
+      combined.push({ summary, detail });
+    }
+    diagnostics.at("validation", "ORDER_FACTS_INVALID");
+    const document = await dependencies.write(
+      options.output,
+      options,
+      listed.pagesScanned,
+      combined,
+      new Date().toISOString(),
+      diagnostics,
+    );
+    log(
+      `Export complete: wrote ${document.orders.length} order(s) to the requested local file.`,
+    );
+    // Retention also runs on success; failures here cannot change the export result.
+    try {
+      await (dependencies.cleanup ?? cleanupFailureReports)();
+    } catch {
+      /* Reporting must not fail a successful export. */
+    }
+  } catch (error) {
+    const report = diagnostics.report(
+      error,
+      error instanceof AuthenticationRequiredError,
+    );
+    let saved = false;
+    try {
+      await (dependencies.report ?? writeFailureReport)(report);
+      saved = true;
+    } catch {
+      /* A report must never replace the original failure. */
+    }
+    log(safeFailureMessage(report));
+    log(
+      saved
+        ? "Owner-local failure report saved."
+        : "Owner-local failure report unavailable; check local permissions and storage (README).",
+    );
+    throw error;
+  }
 }
 
 export async function runExportWithBrowserLifecycle(
@@ -389,13 +490,25 @@ export async function runExportWithBrowserLifecycle(
   },
 ): Promise<void> {
   let leaveBrowserOpen = false;
+  let exportFailed = false;
   try {
     await dependencies.run(options);
   } catch (error) {
     leaveBrowserOpen = error instanceof AuthenticationRequiredError;
+    exportFailed = true;
     throw error;
   } finally {
-    if (!leaveBrowserOpen) await dependencies.close();
+    if (!leaveBrowserOpen) {
+      if (exportFailed) {
+        try {
+          await dependencies.close();
+        } catch {
+          /* Preserve the original export failure. */
+        }
+      } else {
+        await dependencies.close();
+      }
+    }
   }
 }
 
@@ -405,7 +518,9 @@ async function main(): Promise<void> {
     options = parseCliOptions(process.argv.slice(2));
   } catch (error) {
     console.error(
-      error instanceof Error ? error.message : "Export failed unexpectedly.",
+      error instanceof CliOptionsError
+        ? error.message
+        : "Could not read export options. Check the required options and local paths.",
     );
     process.exitCode = 1;
     return;

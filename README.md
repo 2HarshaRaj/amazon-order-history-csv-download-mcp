@@ -113,6 +113,64 @@ gift-card data, tracking data, invoice contents, and browser session data. It
 does not upload data or integrate with Google Sheets, Fold, or any consumer
 repository.
 
+
+Failures automatically create a separate, private JSON diagnostic report in
+`~/.amazon-order-history-poc/failure-reports/` (on Windows:
+`$HOME\.amazon-order-history-poc\failure-reports`). No debug flag is required.
+This directory is outside Git repositories and separate from the exported JSON.
+Console output and scheduled operational logs contain only stage/reason codes,
+counts, and whether the report was saved. Exit status remains 1 on failure;
+authentication failures still leave Chromium open for manual sign-in.
+
+Reports contain available validated order IDs, dates/cancellation status, the
+zero-based selected order index, product names/ASINs, quantities, monetary facts
+in integer paise, adjustments, extraction/fallback sources, bounded technical
+events and stage timings, and runtime versions where available. Reconciliation
+records item and adjustment sums, expected and actual totals, and
+`differencePaise = actualPaise - expectedPaise` (tolerance: one paise). Missing
+facts stay missing; diagnostics do not infer the cause of the first-order
+failure. The export contract and validation rules are unchanged. No additional
+payment pages are visited and no payment categories are collected.
+
+**Treat these reports as private purchase records.** Inspect them only on the
+owner's machine; do not paste or attach the full report to chat, GitHub, CI,
+notifications, shared folders, or cloud-synced storage. Reports exclude raw
+HTML/screenshots, raw exception messages/stacks, URLs, credentials, OTPs,
+cookies, card/UPI identifiers, recipients and contact/address fields. Only
+allowlisted facts are retained; suspicious product text and unrecognized
+adjustment labels are omitted. To open the latest report locally on Windows:
+
+```powershell
+$diagnosticDir = Join-Path $HOME '.amazon-order-history-poc\failure-reports'
+$latestReport = Get-ChildItem -LiteralPath $diagnosticDir -File -Filter 'failure-*.json' |
+  Sort-Object Name -Descending | Select-Object -First 1
+if ($latestReport) { notepad.exe $latestReport.FullName }
+```
+
+For troubleshooting outside the owner's machine, share only `failure.stage`,
+`failure.reason`, `failure.category`, and counts after checking them. A message
+that the report is unavailable means the local write/cleanup or permission check
+failed; the original export failure and exit status are preserved. Check free
+disk space and access to the diagnostic directory without posting private paths
+or file contents. Reports use owner-only Windows ACLs (via local PowerShell) or
+POSIX directory/file modes `0700`/`0600`. If access cannot be restricted, the
+report is not written. Do not relax permissions to make reporting work.
+
+On each export, reports aged 30 days are removed, with a maximum of 50 managed
+files at 128 KiB each (6.25 MiB total). Reports cap item/adjustment lines at 100
+and technical events/timings at 200; `truncated` flags omitted evidence. The
+writer validates the complete report against a strict recursive runtime allowlist
+before touching the filesystem; unexpected fields or unsafe values reject the
+report. It uses exclusive temporary files and atomic rename. Capacity eviction
+of valid reports happens only after a new report is published, so a failed
+write or rename preserves existing valid evidence. Cleanup only handles
+recognized report filenames, skips links and directories, and removes abandoned
+temporary files after an hour. Expiry runs when the exporter runs, not as a
+background service. To delete evidence sooner, stop the exporter, open the
+`failure-reports` folder locally, and delete only its generated
+`failure-<timestamp>-<UUID>.json` / `.json.tmp` files. Leave the sibling
+`browser-data` profile intact.
+
 ## Supported Regions
 
 | Region         | Domain        | Currency |
