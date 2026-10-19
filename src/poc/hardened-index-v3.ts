@@ -14,6 +14,7 @@ import { Money, parseMoney } from "../core/types/money";
 import { OrderHeader } from "../core/types/order";
 
 import { DiagnosticError, FailureDiagnostics } from "./failure-diagnostics";
+import { extractHeaderOrderTotal } from "./order-total";
 
 const REGION = "in";
 const DOMAIN = "amazon.in";
@@ -237,16 +238,6 @@ function parseOrderIdFromText(text: string): string | null {
   return uuid ? uuid[1] : null;
 }
 
-function parseOrderTotalFromText(text: string): Money | undefined {
-  const labeled = text.match(
-    /(?:Order\s*Total|Total)\s*\n?\s*(?:₹|INR\s*)?\s*([\d,]+(?:\.\d{1,2})?)/i,
-  );
-  if (labeled) return parseMoney(`₹${labeled[1]}`, CURRENCY);
-
-  const rupee = text.match(/₹\s*([\d,]+(?:\.\d{1,2})?)/);
-  return rupee ? parseMoney(`₹${rupee[1]}`, CURRENCY) : undefined;
-}
-
 async function extractCancelledOrderListItems(
   card: Locator,
 ): Promise<CancelledOrderListItem[]> {
@@ -359,15 +350,27 @@ function directHeader(orderId: string): OrderHeader {
   };
 }
 
+interface OrderPageSelection {
+  startKey: number;
+  endKey: number;
+  orderOffset: number;
+  maxOrders: number;
+}
+
 export async function parseCurrentOrderPage(
   targetPage: Page,
+  diagnostics?: FailureDiagnostics,
+  selection?: OrderPageSelection,
 ): Promise<MinimalOrder[]> {
   const cards = targetPage.locator(ORDER_CARD_SELECTOR);
   const count = await cards.count();
   const dedupe = new Map<string, MinimalOrder>();
+  const selectedIndexes = new Map<string, number>();
 
   for (let i = 0; i < count; i++) {
-    const text = await cards.nth(i).innerText({ timeout: 1500 }).catch(() => "");
+    const card = cards.nth(i);
+    if (!(await card.isVisible())) continue;
+    const text = await card.innerText({ timeout: 1500 }).catch(() => "");
     if (!text) continue;
 
     const orderId = parseOrderIdFromText(text);
@@ -378,16 +381,36 @@ export async function parseCurrentOrderPage(
     // but retain paired image/title product links.
     const cancelled = /\b(?:cancelled|canceled)\b/i.test(text);
     const cancelledItems = cancelled
-      ? await extractCancelledOrderListItems(cards.nth(i))
+      ? await extractCancelledOrderListItems(card)
       : [];
-    dedupe.set(orderId, {
+    const order: MinimalOrder = {
       orderId,
       orderDate: keyToIso(orderDateKey),
       orderDateKey,
-      orderTotal: safeMoney(parseOrderTotalFromText(text)),
       status: cancelled ? "cancelled" : undefined,
       cancelledItems: cancelled ? cancelledItems : undefined,
-    });
+    };
+    const orderIndex = selectedIndexes.get(orderId) ??
+      ((selection?.orderOffset ?? 0) + selectedIndexes.size);
+    const selected = !selection || (
+      orderDateKey >= selection.startKey &&
+      orderDateKey <= selection.endKey &&
+      orderIndex < selection.maxOrders
+    );
+    if (selected) {
+      selectedIndexes.set(orderId, orderIndex);
+      diagnostics?.select(order, orderIndex);
+      diagnostics?.at("list", "LIST_TOTAL_READ_FAILED");
+      const total = await extractHeaderOrderTotal(card);
+      if (!total && !cancelled) {
+        throw new DiagnosticError(
+          "list", "LIST_TOTAL_MISSING",
+          "Order card has no independently validated header total.",
+        );
+      }
+      order.orderTotal = safeMoney(total);
+    }
+    dedupe.set(orderId, order);
   }
 
   return [...dedupe.values()];
@@ -443,7 +466,13 @@ export async function listOrders(
     await targetPage.waitForSelector(ORDER_CARD_SELECTOR, { timeout: 3000 });
     diagnostics?.at("list", "LIST_FACTS_MISSING");
 
-    const pageOrders = await parseCurrentOrderPage(targetPage);
+    diagnostics?.listed(matches, pagesScanned + 1);
+    const pageOrders = await parseCurrentOrderPage(targetPage, diagnostics, {
+      startKey,
+      endKey,
+      orderOffset: matches.length,
+      maxOrders,
+    });
     pagesScanned += 1;
 
     if (pageOrders.length === 0) {

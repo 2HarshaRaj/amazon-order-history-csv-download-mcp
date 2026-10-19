@@ -41,6 +41,8 @@ type Scenario =
   | "list-navigation"
   | "list-selector"
   | "list-facts"
+  | "missing-total"
+  | "ambiguous-total"
   | "detail"
   | "adjustments"
   | "items"
@@ -73,6 +75,24 @@ function fakeBrowser(scenario: Scenario) {
       },
       count: async () => (isCard || isSummary ? 1 : 0),
       nth: () => ({
+        isVisible: async () => true,
+        locator: () => ({
+          count: async () => (scenario === "missing-total" ? 0 : 1),
+          nth: () => ({
+            isVisible: async () => true,
+            getByText: () => ({
+              count: async () => (scenario === "ambiguous-total" ? 2 : 1),
+              nth: (index: number) => ({
+                locator: () => ({ count: async () => 0 }),
+                isVisible: async () => true,
+                evaluate: async (_callback: unknown, selector: string) =>
+                  selector.startsWith(".order-header"),
+                innerText: async () =>
+                  `Total\n₹${index ? "125.00" : scenario === "reconciliation" ? "200.02" : "200.00"}`,
+              }),
+            }),
+          }),
+        }),
         innerText: async () =>
           scenario === "list-facts"
             ? "unrecognized synthetic card"
@@ -169,6 +189,8 @@ describe("hardened POC failure diagnostics pipeline", () => {
     ["list-navigation", "list", "LIST_NAVIGATION_FAILED"],
     ["list-selector", "list", "LIST_SELECTOR_MISSING"],
     ["list-facts", "list", "LIST_FACTS_MISSING"],
+    ["missing-total", "list", "LIST_TOTAL_MISSING"],
+    ["ambiguous-total", "list", "LIST_TOTAL_AMBIGUOUS"],
     ["detail", "detail", "DETAIL_NAVIGATION_FAILED"],
     ["adjustments", "adjustments", "ADJUSTMENT_AMOUNT_INVALID"],
     ["items", "items", "ITEMS_EMPTY"],
@@ -223,6 +245,8 @@ describe("hardened POC failure diagnostics pipeline", () => {
       else expect(await readdir(output)).toEqual([]);
       if (
         [
+          "missing-total",
+          "ambiguous-total",
           "detail",
           "adjustments",
           "items",
@@ -237,8 +261,16 @@ describe("hardened POC failure diagnostics pipeline", () => {
           orderId,
           orderIndex: 0,
           orderDate: "2026-10-01",
-          orderTotalPaise: scenario === "reconciliation" ? 20002 : 20000,
         });
+      if (
+        evidence.order &&
+        scenario !== "missing-total" &&
+        scenario !== "ambiguous-total"
+      ) {
+        expect(evidence.order.orderTotalPaise).toBe(
+          scenario === "reconciliation" ? 20002 : 20000,
+        );
+      }
       if (scenario === "reconciliation")
         expect(evidence.reconciliation?.differencePaise).toBe(-2);
       if (scenario === "invoice-selector")
