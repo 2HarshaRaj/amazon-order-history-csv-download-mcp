@@ -1,4 +1,4 @@
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { z } from "zod";
 import { Money, parseMoney } from "../core/types/money";
 import { DiagnosticError } from "./failure-diagnostics";
@@ -19,14 +19,17 @@ const totalText = z.string().max(200);
 const READ_TIMEOUT = 1500;
 const MAX_CANDIDATES = 16;
 
-async function containsExcludedContent(scope: Locator): Promise<boolean> {
+async function containsExcludedContent(
+  scope: Locator,
+  detail = false,
+): Promise<boolean> {
   const excluded = scope.locator(EXCLUDED_CONTEXT);
   const count = await excluded.count();
   if (count > MAX_CANDIDATES) {
     throw new DiagnosticError(
-      "list",
-      "LIST_TOTAL_AMBIGUOUS",
-      "Order header has ambiguous nested regions.",
+      detail ? "detail" : "list",
+      detail ? "DETAIL_TOTAL_AMBIGUOUS" : "LIST_TOTAL_AMBIGUOUS",
+      "Total has ambiguous nested regions.",
     );
   }
   for (let index = 0; index < count; index++) {
@@ -128,4 +131,192 @@ export async function extractHeaderOrderTotal(
       "Order header totals conflict.",
     );
   return totals.values().next().value;
+}
+
+const orderIdSchema = z
+  .string()
+  .regex(
+    /^(?:\d{3}-\d{7}-\d{7}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i,
+  );
+const GRAND_TOTAL = /^grand\s+total\b/i;
+
+/** Read the explicit Grand Total before any invoice navigation. URL identity and
+ * a unique visible detail summary bind the source to the requested order.
+ * Missing is allowed only for the caller's independently confirmed cancellation;
+ * any declared but invalid or conflicting amount still fails closed.
+ */
+export async function extractDetailOrderTotal(
+  page: Page,
+  orderId: string,
+  allowMissing = false,
+): Promise<Money | undefined> {
+  let url: URL;
+  try {
+    orderIdSchema.parse(orderId);
+    url = new URL(page.url());
+    const ids = [
+      ...url.searchParams.getAll("orderID"),
+      ...url.searchParams.getAll("orderId"),
+    ];
+    if (
+      url.protocol !== "https:" ||
+      !["www.amazon.in", "amazon.in"].includes(url.hostname) ||
+      url.port !== "" ||
+      url.username ||
+      url.password ||
+      ![
+        "/gp/your-account/order-details",
+        "/your-orders/order-details",
+      ].includes(url.pathname) ||
+      ids.length !== 1 ||
+      ids[0] !== orderId
+    )
+      throw new Error();
+  } catch {
+    throw new DiagnosticError(
+      "detail",
+      "DETAIL_ORDER_MISMATCH",
+      "Order-detail identity validation failed.",
+    );
+  }
+  try {
+    const summaries = page.locator("#od-subtotals");
+    const count = await summaries.count();
+    if (count > 1)
+      throw new DiagnosticError(
+        "detail",
+        "DETAIL_TOTAL_AMBIGUOUS",
+        "Order-detail summary is ambiguous.",
+      );
+    if (!count) {
+      if (allowMissing) return undefined;
+      throw new DiagnosticError(
+        "detail",
+        "DETAIL_TOTAL_MISSING",
+        "Order-detail Grand Total is missing.",
+      );
+    }
+    const summary = summaries.first();
+    const identityMatches = await summary.evaluate(
+      (element, expected) => {
+        const owner = element.closest("[data-order-id]");
+        return (
+          (!owner || owner.getAttribute("data-order-id") === expected) &&
+          !element.closest(
+            '.js-order-card, .order-card, [data-component="orderCard"]',
+          )
+        );
+      },
+      orderId,
+      { timeout: READ_TIMEOUT },
+    );
+    if (!identityMatches)
+      throw new DiagnosticError(
+        "detail",
+        "DETAIL_ORDER_MISMATCH",
+        "Order-detail summary identity validation failed.",
+      );
+    if (!(await summary.isVisible())) {
+      if (
+        allowMissing &&
+        (await summary.evaluate(
+          (element) => !element.textContent?.trim(),
+          undefined,
+          { timeout: READ_TIMEOUT },
+        ))
+      )
+        return undefined;
+      throw new DiagnosticError(
+        "detail",
+        "DETAIL_TOTAL_INVALID",
+        "Order-detail summary is not visible.",
+      );
+    }
+    const candidates = summary.getByText(GRAND_TOTAL);
+    const candidateCount = await candidates.count();
+    if (candidateCount > MAX_CANDIDATES)
+      throw new DiagnosticError(
+        "detail",
+        "DETAIL_TOTAL_AMBIGUOUS",
+        "Order-detail Grand Total candidates are ambiguous.",
+      );
+    const totals = new Map<number, Money>();
+    for (let index = 0; index < candidateCount; index++) {
+      const candidate = candidates.nth(index);
+      if (
+        !(await candidate.isVisible()) ||
+        (await candidate.evaluate(
+          (element, selector) => !!element.closest(selector),
+          EXCLUDED_CONTEXT,
+          { timeout: READ_TIMEOUT },
+        ))
+      )
+        continue;
+      const candidateOwnerMatches = await candidate.evaluate(
+        (element, expected) => {
+          const owner = element.closest("[data-order-id]");
+          return (
+            (!owner || owner.getAttribute("data-order-id") === expected) &&
+            !element.closest(
+              '.js-order-card, .order-card, [data-component="orderCard"]',
+            )
+          );
+        },
+        orderId,
+        { timeout: READ_TIMEOUT },
+      );
+      if (!candidateOwnerMatches)
+        throw new DiagnosticError(
+          "detail",
+          "DETAIL_ORDER_MISMATCH",
+          "Grand Total summary owner does not match the requested order.",
+        );
+      let scope = candidate;
+      let total: Money | undefined;
+      for (let depth = 0; depth < 4; depth++) {
+        if (
+          !(await scope.evaluate(
+            (element) => !!element.closest("#od-subtotals"),
+            undefined,
+            { timeout: READ_TIMEOUT },
+          ))
+        )
+          break;
+        if (!(await containsExcludedContent(scope, true))) {
+          const text = await scope.innerText({ timeout: READ_TIMEOUT });
+          if (GRAND_TOTAL.test(text.trim())) total = parseHeaderTotalText(text);
+        }
+        if (total) break;
+        scope = scope.locator("xpath=..");
+      }
+      if (!total)
+        throw new DiagnosticError(
+          "detail",
+          "DETAIL_TOTAL_INVALID",
+          "Order-detail Grand Total is not a validated INR label/value pair.",
+        );
+      totals.set(Math.round(total.amount * 100), total);
+    }
+    if (totals.size > 1)
+      throw new DiagnosticError(
+        "detail",
+        "DETAIL_TOTAL_AMBIGUOUS",
+        "Order-detail Grand Totals conflict.",
+      );
+    const total = totals.values().next().value;
+    if (!total && !allowMissing)
+      throw new DiagnosticError(
+        "detail",
+        "DETAIL_TOTAL_MISSING",
+        "Order-detail Grand Total is missing.",
+      );
+    return total;
+  } catch (error) {
+    if (error instanceof DiagnosticError) throw error;
+    throw new DiagnosticError(
+      "detail",
+      "DETAIL_TOTAL_READ_FAILED",
+      "Order-detail Grand Total could not be read.",
+    );
+  }
 }

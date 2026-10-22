@@ -37,9 +37,11 @@ const money = (amount: number) => ({
   currency: "INR",
   formatted: `₹${amount}`,
 });
-function detail(orderId: string, itemTotal = 1220) {
+function detail(orderId: string, itemTotal = 1220, grossTotal = 1225) {
   return {
     orderId,
+    orderTotal: money(grossTotal),
+    orderTotalSource: "order-detail-grand-total" as const,
     extractionSource: "order-detail",
     itemCount: 1,
     items: [
@@ -247,7 +249,7 @@ describeWithBrowser("Amazon.in gross totals from visible card headers", () => {
       createExportDocument(
         options,
         1,
-        [{ summary, detail: detail(summary.orderId, 354.5) }],
+        [{ summary, detail: detail(summary.orderId, 354.5, 359.5) }],
         new Date().toISOString(),
       ).orders[0].orderTotal,
     ).toBe(359.5);
@@ -358,7 +360,7 @@ describeWithBrowser("Amazon.in gross totals from visible card headers", () => {
           options,
           1,
           [
-            { summary: first, detail: detail(first.orderId, 354.5) },
+            { summary: first, detail: detail(first.orderId, 354.5, 359.5) },
             { summary: second, detail: detail(second.orderId, 1219.98) },
           ],
           new Date().toISOString(),

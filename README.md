@@ -108,17 +108,33 @@ zero-based `lineIndex`, optional/empty ASIN, product name, numeric quantity,
 numeric unit and line totals, `INR`, and its safe extraction source. The export
 fails closed before file creation if a required fact is absent or invalid.
 
-Gross purchase totals come only from visible `Total`, `Order Total`, or
-`Grand Total` label/value pairs in recognized order-card headers (`order-header`,
-`order-info`, or `data-component="orderHeader"`). Visible header totals must agree.
-Missing, invalid, or conflicting totals stop the export with safe
-`LIST_TOTAL_MISSING`, `LIST_TOTAL_INVALID`, or `LIST_TOTAL_AMBIGUOUS` diagnostics.
-An explicit `Order Total` or `Grand Total` declaration with an unreadable or
-unsupported value is invalid even alongside a valid total or on a cancelled
-order; it cannot activate the unpriced-cancellation fallback.
-Unrecognized header layouts require a parser update; there is no fallback to the
-first price, a subtotal, or a payment component. The existing independently
-confirmed unpriced-cancellation representation remains available.
+For priced orders, `orderTotal` comes only from an explicit, visible `Grand Total`
+INR label/value pair in the already visited Order Details page's unique
+`#od-subtotals` summary. The final HTTPS Amazon.in detail URL must identify the
+requested order, and any explicit summary owner must match it. All eligible
+Grand Total displays must agree. Missing, unreadable, hidden-only, or conflicting
+detail evidence stops export with safe `DETAIL_TOTAL_*` diagnostics; an identity
+mismatch uses `DETAIL_ORDER_MISMATCH`. Generic `Total`, subtotals, invoice amounts,
+item sums, and payment components cannot substitute for the detail Grand Total.
+
+Order-card header totals remain validated list observations, not authoritative
+gross amounts. A syntactically valid list `Total` can differ from the detail
+`Grand Total`; the reason for Amazon's display difference is not inferred.
+The detail value is used and a bounded `LIST_DETAIL_TOTAL_DIFFER` event is retained
+in owner-local failure diagnostics if export later fails, without adding fields
+to exported JSON. Diagnostic reconciliation uses the detail gross as its expected
+amount; selected-order evidence retains the original list observations. Missing,
+invalid, or conflicting list headers still stop export with `LIST_TOTAL_*` reasons.
+Duplicate same-order cards, including across scanned pages, must agree on their
+date, status, and monetary facts (`LIST_DUPLICATE_CONFLICT`); later cards cannot
+silently overwrite earlier observations.
+
+Confirmed unpriced cancellations retain the existing constrained null-money
+representation only when the list has no total, cancellation is independently
+confirmed on Order Details, cancelled list items exist, no adjustments exist, and
+no visible eligible detail Grand Total is declared. An invalid or conflicting
+detail declaration cannot activate this fallback. Unsupported layouts require a
+parser update and fail closed.
 
 Purchase totals and tender sources are distinct: vouchers and gift-card balances
 fund an order; they are not inferred discounts or additional purchases. Neither

@@ -44,6 +44,8 @@ const summary = {
 };
 const detail = {
   orderId: summary.orderId,
+  orderTotal: money(210.02),
+  orderTotalSource: "order-detail-grand-total" as const,
   extractionSource: "order-detail",
   itemCount: 1,
   items: [

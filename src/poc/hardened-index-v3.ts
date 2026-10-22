@@ -14,7 +14,7 @@ import { Money, parseMoney } from "../core/types/money";
 import { OrderHeader } from "../core/types/order";
 
 import { DiagnosticError, FailureDiagnostics } from "./failure-diagnostics";
-import { extractHeaderOrderTotal } from "./order-total";
+import { extractDetailOrderTotal, extractHeaderOrderTotal } from "./order-total";
 
 const REGION = "in";
 const DOMAIN = "amazon.in";
@@ -355,6 +355,25 @@ interface OrderPageSelection {
   endKey: number;
   orderOffset: number;
   maxOrders: number;
+  previousOrders?: MinimalOrder[];
+}
+
+function assertMatchingListedFacts(
+  previous: MinimalOrder,
+  current: MinimalOrder,
+): void {
+  const amount = (order: MinimalOrder): number | undefined =>
+    order.orderTotal === undefined ? undefined : Math.round(order.orderTotal.amount * 100);
+  if (
+    previous.orderDate !== current.orderDate ||
+    previous.status !== current.status ||
+    amount(previous) !== amount(current)
+  ) {
+    throw new DiagnosticError(
+      "list", "LIST_DUPLICATE_CONFLICT",
+      "Duplicate order cards have conflicting facts.",
+    );
+  }
 }
 
 export async function parseCurrentOrderPage(
@@ -365,7 +384,9 @@ export async function parseCurrentOrderPage(
   const cards = targetPage.locator(ORDER_CARD_SELECTOR);
   const count = await cards.count();
   const dedupe = new Map<string, MinimalOrder>();
-  const selectedIndexes = new Map<string, number>();
+  const known = new Map(selection?.previousOrders?.map((order) => [order.orderId, order]));
+  const selectedIndexes = new Map(selection?.previousOrders?.map((order, index) => [order.orderId, index]));
+  const previousCount = selectedIndexes.size;
 
   for (let i = 0; i < count; i++) {
     const card = cards.nth(i);
@@ -391,8 +412,8 @@ export async function parseCurrentOrderPage(
       cancelledItems: cancelled ? cancelledItems : undefined,
     };
     const orderIndex = selectedIndexes.get(orderId) ??
-      ((selection?.orderOffset ?? 0) + selectedIndexes.size);
-    const selected = !selection || (
+      ((selection?.orderOffset ?? 0) + selectedIndexes.size - previousCount);
+    const selected = selectedIndexes.has(orderId) || !selection || (
       orderDateKey >= selection.startKey &&
       orderDateKey <= selection.endKey &&
       orderIndex < selection.maxOrders
@@ -410,7 +431,9 @@ export async function parseCurrentOrderPage(
       }
       order.orderTotal = safeMoney(total);
     }
-    dedupe.set(orderId, order);
+    const previous = dedupe.get(orderId) ?? known.get(orderId);
+    if (previous && selected) assertMatchingListedFacts(previous, order);
+    if (!dedupe.has(orderId)) dedupe.set(orderId, previous ?? order);
   }
 
   return [...dedupe.values()];
@@ -472,6 +495,7 @@ export async function listOrders(
       endKey,
       orderOffset: matches.length,
       maxOrders,
+      previousOrders: matches,
     });
     pagesScanned += 1;
 
@@ -485,6 +509,7 @@ export async function listOrders(
 
     for (const order of pageOrders) {
       if (order.orderDateKey >= startKey && order.orderDateKey <= endKey) {
+        if (matches.some((previous) => previous.orderId === order.orderId)) continue;
         matches.push(order);
         if (matches.length >= maxOrders) break;
       }
@@ -510,6 +535,7 @@ export function createCancelledOrderListDetail(
   listedOrder: ListedOrder | undefined,
   cancellationConfirmed: boolean,
   adjustments: OrderAdjustment[],
+  detailOrderTotal?: Money,
 ) {
   // Require independent list/detail cancellation signals and no monetary rows.
   // The missing values remain missing; this does not synthesize a zero balance.
@@ -518,13 +544,16 @@ export function createCancelledOrderListDetail(
     listedOrder?.status !== "cancelled" ||
     listedOrder.orderTotal !== undefined ||
     !listedOrder.cancelledItems?.length ||
-    adjustments.length !== 0
+    adjustments.length !== 0 ||
+    detailOrderTotal !== undefined
   ) {
     return null;
   }
 
   return {
     orderId,
+    orderTotal: undefined,
+    orderTotalSource: undefined,
     extractionSource: "cancelled-order-list",
     itemCount: listedOrder.cancelledItems.length,
     adjustments,
@@ -585,6 +614,17 @@ export async function extractOrderItems(
       .count()
       .catch(() => 0)) > 0;
 
+  // The list's TOTAL is an observation, not proof of gross purchase value.
+  // Validate the detail source even for cancellations before admitting nulls.
+  trace?.at("detail", "DETAIL_TOTAL_READ_FAILED");
+  const allowMissingTotal = createCancelledOrderListDetail(
+    orderId, listedOrder, cancellationConfirmed, adjustments,
+  ) !== null;
+  const detailOrderTotal = await extractDetailOrderTotal(
+    targetPage, orderId, allowMissingTotal,
+  );
+  trace?.authoritativeTotal(detailOrderTotal);
+
   trace?.provenance("order-detail");
   trace?.at("items", "ITEM_EXTRACTION_FAILED");
   let items = await extractItems(targetPage, header, diagnostics).catch((error: unknown) => {
@@ -608,6 +648,7 @@ export async function extractOrderItems(
     listedOrder,
     cancellationConfirmed,
     adjustments,
+    detailOrderTotal,
   );
   const preferredCancelledDetail = preferCancelledOrderListDetail(
     cancelledOrderListDetail,
@@ -656,6 +697,8 @@ export async function extractOrderItems(
 
   return {
     orderId,
+    orderTotal: safeMoney(detailOrderTotal),
+    orderTotalSource: "order-detail-grand-total" as const,
     extractionSource: source,
     itemCount: items.length,
     adjustments,
@@ -677,7 +720,7 @@ const tools: Tool[] = [
   },
   {
     name: "list_amazon_in_orders",
-    description: "List Amazon.in order IDs, dates and totals for a bounded date range using an India-specific minimal parser. Returns no address, recipient or payment data.",
+    description: "List Amazon.in order IDs, dates and order-card total observations for a bounded date range. Priced JSON exports independently validate Order Details Grand Total. Returns no address, recipient or payment data.",
     inputSchema: {
       type: "object",
       properties: {
