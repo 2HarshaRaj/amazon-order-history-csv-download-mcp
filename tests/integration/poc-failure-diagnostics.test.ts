@@ -69,6 +69,36 @@ function fakeBrowser(scenario: Scenario) {
   const locator = (selector: string) => {
     const isCard = selector.includes(".js-order-card");
     const isSummary = selector === "#od-subtotals";
+    if (isSummary)
+      return {
+        first() {
+          return this;
+        },
+        count: async () => 1,
+        isVisible: async () => true,
+        evaluate: async () => true,
+        getByText: () => ({
+          count: async () => 1,
+          nth: () => ({
+            isVisible: async () => true,
+            evaluate: async (_callback: unknown, selector?: string) =>
+              !selector || selector === orderId,
+            locator: () => ({ count: async () => 0 }),
+            innerText: async () =>
+              `Grand Total ₹${scenario === "reconciliation" ? "200.02" : "200.00"}`,
+          }),
+        }),
+        locator: () => ({
+          allInnerTexts: async () =>
+            scenario === "adjustments"
+              ? ["Shipping:  ₹0.00", "Marketplace Fee:  PRIVATE_BAD_AMOUNT"]
+              : [
+                  "Shipping:  ₹0.00",
+                  "Payment method:  Visa ending 9999",
+                  "UPI:  buyer@upi",
+                ],
+        }),
+      };
     return {
       first() {
         return this;

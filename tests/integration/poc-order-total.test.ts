@@ -37,9 +37,11 @@ const money = (amount: number) => ({
   currency: "INR",
   formatted: `₹${amount}`,
 });
-function detail(orderId: string, itemTotal = 1220) {
+function detail(orderId: string, itemTotal = 1220, grossTotal = 1225) {
   return {
     orderId,
+    orderTotal: money(grossTotal),
+    orderTotalSource: "order-detail-grand-total" as const,
     extractionSource: "order-detail",
     itemCount: 1,
     items: [
@@ -163,6 +165,55 @@ describeWithBrowser("Amazon.in gross totals from visible card headers", () => {
     });
   });
 
+  describe.each(["ordinary", "cancelled"])("%s order", (status) => {
+    test.each([
+      "Order Total unavailable",
+      "Grand Total pending",
+      "Order Total Rs. 1,225.00",
+      "Grand Total EUR 1,225.00",
+    ])(
+      "rejects an explicit but unreadable gross declaration: %s",
+      async (text) => {
+        const html =
+          status === "cancelled"
+            ? readFileSync(
+                join(__dirname, "fixtures/order-card-in-cancelled.html"),
+                "utf8",
+              )
+            : mixed;
+        await page.setContent(html);
+        if (status === "cancelled") {
+          await page.locator(".order-card").evaluate((card, text) => {
+            const header = card.ownerDocument.createElement("div");
+            header.className = "order-header";
+            header.textContent = text;
+            card.prepend(header);
+          }, text);
+        } else {
+          await page.locator("#gross-total-cell").evaluate((cell, text) => {
+            cell.textContent = text;
+          }, text);
+        }
+        await expect(parseCurrentOrderPage(page)).rejects.toMatchObject({
+          stage: "list",
+          reason: "LIST_TOTAL_INVALID",
+        });
+      },
+    );
+  });
+
+  test("rejects an unreadable gross declaration alongside a valid total", async () => {
+    await page.setContent(mixed);
+    await page.locator(".order-header").evaluate((header) => {
+      const duplicate = header.ownerDocument.createElement("div");
+      duplicate.textContent = "Order Total unavailable";
+      header.appendChild(duplicate);
+    });
+    await expect(parseCurrentOrderPage(page)).rejects.toMatchObject({
+      reason: "LIST_TOTAL_INVALID",
+    });
+  });
+
   test("ignores hidden popup amounts within an otherwise valid total cell", async () => {
     await page.setContent(mixed);
     await page
@@ -198,7 +249,7 @@ describeWithBrowser("Amazon.in gross totals from visible card headers", () => {
       createExportDocument(
         options,
         1,
-        [{ summary, detail: detail(summary.orderId, 354.5) }],
+        [{ summary, detail: detail(summary.orderId, 354.5, 359.5) }],
         new Date().toISOString(),
       ).orders[0].orderTotal,
     ).toBe(359.5);
@@ -309,7 +360,7 @@ describeWithBrowser("Amazon.in gross totals from visible card headers", () => {
           options,
           1,
           [
-            { summary: first, detail: detail(first.orderId, 354.5) },
+            { summary: first, detail: detail(first.orderId, 354.5, 359.5) },
             { summary: second, detail: detail(second.orderId, 1219.98) },
           ],
           new Date().toISOString(),

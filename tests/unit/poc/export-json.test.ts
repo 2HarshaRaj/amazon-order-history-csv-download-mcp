@@ -33,6 +33,8 @@ function rawOrder(orderId: string, quantity = 2) {
     },
     detail: {
       orderId,
+      orderTotal: { amount: 200, currency: "INR", formatted: "₹200.00" },
+      orderTotalSource: "order-detail-grand-total" as const,
       extractionSource: "order-detail",
       itemCount: 1,
       adjustments: parseOrderSummaryAdjustments([]),
@@ -66,6 +68,8 @@ function rawCancelledOrder(orderId: string) {
     },
     detail: {
       orderId,
+      orderTotal: undefined,
+      orderTotalSource: undefined,
       extractionSource: "cancelled-order-list",
       itemCount: 1,
       adjustments: [],
@@ -83,6 +87,51 @@ function rawCancelledOrder(orderId: string) {
 }
 
 describe("POC JSON export contract", () => {
+  test("uses only the independently sourced detail gross when the list differs", () => {
+    const order = rawOrder("408-0000000-0000001");
+    order.summary.orderTotal.amount = 25;
+    expect(
+      createExportDocument(options, 1, [order], timestamp).orders[0].orderTotal,
+    ).toBe(200);
+    expect(() =>
+      createExportDocument(
+        options,
+        1,
+        [{ ...order, detail: { ...order.detail, orderTotal: undefined } }],
+        timestamp,
+      ),
+    ).toThrow("order total");
+    expect(() =>
+      createExportDocument(
+        options,
+        1,
+        [
+          {
+            ...order,
+            detail: {
+              ...order.detail,
+              orderTotalSource: undefined,
+            } as unknown as Parameters<
+              typeof createExportDocument
+            >[2][number]["detail"],
+          },
+        ],
+        timestamp,
+      ),
+    ).toThrow("Grand Total source");
+  });
+
+  test.each([-0.02, -0.01, 0.01, 0.02])(
+    "enforces signed paise tolerance against detail gross (%s)",
+    (delta) => {
+      const order = rawOrder("408-0000000-0000001");
+      order.detail.orderTotal.amount = 200 + delta;
+      const run = () => createExportDocument(options, 1, [order], timestamp);
+      if (Math.abs(delta) <= 0.01)
+        expect(run().orders[0].orderTotal).toBe(200 + delta);
+      else expect(run).toThrow("within one paise");
+    },
+  );
   test("converts Money objects to numbers and retains quantity pricing semantics", () => {
     const result = createExportDocument(
       options,
@@ -102,7 +151,7 @@ describe("POC JSON export contract", () => {
 
   test("emits explicit adjustments and reconciles item plus marketplace fee", () => {
     const order = rawOrder("408-0000000-0000001", 1);
-    order.summary.orderTotal.amount = 204;
+    order.detail.orderTotal.amount = 204;
     order.detail.items[0].unitPrice.amount = 199;
     order.detail.items[0].itemTotal.amount = 199;
     order.detail.adjustments = parseOrderSummaryAdjustments([
@@ -135,7 +184,7 @@ describe("POC JSON export contract", () => {
 
   test("emits a positive Cash/Pay on Delivery fee and reconciles the order", () => {
     const order = rawOrder("408-0000000-0000001", 1);
-    order.summary.orderTotal.amount = 205;
+    order.detail.orderTotal.amount = 205;
     order.detail.items[0].unitPrice.amount = 200;
     order.detail.items[0].itemTotal.amount = 200;
     order.detail.adjustments = parseOrderSummaryAdjustments([
@@ -235,7 +284,7 @@ describe("POC JSON export contract", () => {
   test("accepts invoice fallback provenance and exactly one paise variance", () => {
     const order = rawOrder("408-0000000-0000001");
     order.detail.extractionSource = "invoice-safe-fallback";
-    order.summary.orderTotal.amount = 200.01;
+    order.detail.orderTotal.amount = 200.01;
     expect(
       createExportDocument(options, 1, [order], timestamp).orders[0].items[0]
         .extractionSource,
@@ -336,7 +385,7 @@ describe("POC JSON export contract", () => {
     };
     expect(() =>
       createExportDocument(options, 1, [pricedSummary], timestamp),
-    ).toThrow("unit price");
+    ).toThrow("order total");
   });
 
   test("fails unexplained residual before replacing an existing destination", async () => {
@@ -344,7 +393,7 @@ describe("POC JSON export contract", () => {
     const output = join(directory, "orders.json");
     await writeFile(output, "unchanged", "utf8");
     const order = rawOrder("408-0000000-0000001");
-    order.summary.orderTotal.amount = 200.02;
+    order.detail.orderTotal.amount = 200.02;
     await expect(
       validateAndWriteExport(output, options, 1, [order], timestamp),
     ).rejects.toThrow("does not reconcile within one paise");
@@ -358,7 +407,7 @@ describe("POC JSON export contract", () => {
       asin: "",
       productName: "Second sanitized product",
     });
-    first.summary.orderTotal.amount = 400;
+    first.detail.orderTotal.amount = 400;
     const input = [first, rawOrder("408-0000000-0000002")];
     const runOne = createExportDocument(options, 1, input, timestamp);
     const runTwo = createExportDocument(options, 1, input, timestamp);

@@ -53,9 +53,16 @@ const reasonCodeSchema = z.enum([
   "LIST_TOTAL_INVALID",
   "LIST_TOTAL_AMBIGUOUS",
   "LIST_TOTAL_READ_FAILED",
+  "LIST_DUPLICATE_CONFLICT",
   "DATE_RANGE_UNSUPPORTED",
   "DETAIL_NAVIGATION_FAILED",
   "DETAIL_SELECTOR_MISSING",
+  "DETAIL_ORDER_MISMATCH",
+  "DETAIL_TOTAL_MISSING",
+  "DETAIL_TOTAL_INVALID",
+  "DETAIL_TOTAL_AMBIGUOUS",
+  "DETAIL_TOTAL_READ_FAILED",
+  "LIST_DETAIL_TOTAL_DIFFER",
   "ADJUSTMENT_READ_FAILED",
   "ADJUSTMENT_AMOUNT_INVALID",
   "SUMMARY_SELECTOR_MISSING",
@@ -108,6 +115,8 @@ interface AdjustmentFacts {
   extractionSource: string;
 }
 interface DetailFacts {
+  orderTotal?: MoneyFact;
+  orderTotalSource?: string;
   extractionSource: string;
   items: ItemFacts[];
   adjustments: AdjustmentFacts[];
@@ -597,6 +606,16 @@ export class FailureDiagnostics {
     this.captureItems(detail.items);
     this.captureAdjustments(detail.adjustments);
     this.extractionSource = source(detail.extractionSource);
+    if (detail.orderTotalSource === "order-detail-grand-total") {
+      this.authoritativeTotal(detail.orderTotal);
+    }
+  }
+  authoritativeTotal(total: MoneyFact): void {
+    const amount = paise(total);
+    if (amount === undefined || !this.order) return;
+    if (this.order.orderTotalPaise !== undefined && this.order.orderTotalPaise !== amount)
+      this.note("detail", "LIST_DETAIL_TOTAL_DIFFER");
+    this.order.orderTotalPaise = amount;
   }
   item(index: number): void {
     this.lineIndex = index;

@@ -271,15 +271,22 @@ export function createExportDocument(
     const cancelledWithoutMoney =
       summary.status === "cancelled" &&
       summary.orderTotal === undefined &&
+      detail.orderTotal === undefined &&
+      detail.orderTotalSource === undefined &&
       detail.extractionSource === "cancelled-order-list" &&
       detail.adjustments.length === 0 &&
       detail.items.length > 0 &&
       detail.items.every(
         (item) => item.unitPrice === undefined && item.itemTotal === undefined,
       );
+    if (!cancelledWithoutMoney && detail.orderTotalSource !== "order-detail-grand-total")
+      throw new DiagnosticError(
+        "validation", "ORDER_TOTAL_INVALID",
+        "Export validation failed: order total requires the Order Details Grand Total source.",
+      );
     const orderTotal = cancelledWithoutMoney
       ? null
-      : numericMoney(summary.orderTotal, "order total");
+      : numericMoney(detail.orderTotal, "order total");
     const items = detail.items.map((item, lineIndex): JsonItem => {
       diagnostics?.item(lineIndex);
       if (
