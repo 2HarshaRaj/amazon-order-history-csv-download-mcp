@@ -137,6 +137,34 @@ current prices, with an empty ASIN when no valid associated identifier is
 available. A supported package descriptor such as `500 g · 1 unit` supplies only
 its explicit purchased-unit count; package size is never treated as quantity.
 Adjacent rupee and numeric DOM nodes are paired only within their own parent.
+Merchandise alone also supports visually rendered adjacent currency/number
+elements beneath `aria-hidden="true"`. Both components must belong to exactly
+one common bounded merchandise row with an independently visible quantity and
+eligible image/product link. The same price view drives row discovery and field
+extraction; values are never matched to products by position. Semantic item
+boundaries cannot be crossed to borrow a price. Each hidden price field may contain
+only the one price or an explicit `Unit price:`, `Item total:` or `Line total:`
+field; unknown qualifiers, extra values and unowned currency evidence fail.
+`hidden`, display/visibility/opacity hiding and historical strike-through remain
+excluded. Identity, names, quantities, images, Bill summary and funding regions
+retain their strict visibility/accessibility rules. Accessibility-hidden bills
+or identities cannot supply missing required facts.
+
+One anchored grammar is shared by quantity field extraction and snapshot parsing:
+`Qty: N`, `Quantity: N`, `N unit(s)`, or a positive mass/volume measurement followed
+by `·`, `•` or `|` and the explicit unit count. Supported measurement units remain
+mg/g/kg/ml/l/litre(s)/liter(s). Only the final purchased-unit count supplies
+quantity; zero/negative package measurements, range endpoints and unbounded
+prefixes do not. Discovery retains malformed quantity signals so they fail
+validation rather than disappearing. Parenthesized package ranges, unknown
+separators and the masked `WORD SEP (range) SEP count unit` presentation remain
+unsupported. Supporting that presentation requires the generic syntactic role of
+the prefix (package label versus bundle/offer), separator codepoints, range
+punctuation/unit rules, and confirmation that the suffix is the purchased-item
+count. No real product names, values or DOM are needed for that clarification.
+The invented 23-item accessibility fixture uses a supported `Quantity:` field
+for its final row; it does not claim to resolve the masked range presentation.
+
 Bill values come from individual label-bound rows, including `Inclusive of taxes`
 only as a subtitle of `You pay`; no flat sequence of unrelated tokens is paired.
 Quantity greater than one requires both labeled **Unit price** and **Item total**

@@ -65,6 +65,11 @@ describe("Amazon Now fact validation (no Chromium)", () => {
     "1 kg • 1 unit",
     "250 ml | 1 unit",
     "500 g · 1 unit(s)",
+    "2 kg • 1 unit",
+    "75 ml | 1 unit",
+    "0.5 l · 1 unit",
+    "1.25 litres • 1 units",
+    "125 mg | 1 unit",
   ])("uses the explicit purchased count in %s", (part) => {
     const facts = fixture();
     facts.items[0].parts[1] = part;
@@ -78,6 +83,18 @@ describe("Amazon Now fact validation (no Chromium)", () => {
     "500 g · 1.5 units",
     "500 g · 1 unit · 2 units",
     "500 g · 1 unit Qty: 1",
+    "0 g · 1 unit",
+    "-250 g · 1 unit",
+    "250 g / 1 unit",
+    "250 g ; 1 unit",
+    "Bundle · (100 - 200 g) · 1 unit",
+    "(100-200 g) · 1 unit",
+    "100-200 g · 1 unit",
+    "250 g · 01 units",
+    "250 g · 1 unit trailing",
+    "250 g · units",
+    "250 g",
+    "1 kg · 9007199254740992 units",
   ])("rejects missing/ambiguous quantity %s", (part) => {
     const facts = fixture();
     facts.items[0].parts[1] = part;

@@ -17,6 +17,11 @@ const NOW_PATHS = [
   "/tez/browse/orderTracking",
 ];
 const TIMEOUT = 3000;
+// Discovery stays conservative: malformed/duplicate quantity signals must not
+// disappear. Only this complete grammar may supply the purchased count.
+const QUANTITY_SIGNAL = /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i;
+const QUANTITY_FIELD =
+  /^(?:(?:qty|quantity)\s*:\s*(\d+)|(?:(?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*(?:mg|g|kg|ml|l|litres?|liters?)\s*[·•|]\s*)?(\d+)\s+unit(?:s|\(s\))?)$/i;
 type NowCheckpoint = (typeof NOW_CHECKPOINTS)[number];
 function checkpoint(
   trace: FailureDiagnostics | undefined,
@@ -160,12 +165,10 @@ export function normalizeNowDisplayedId(value: string): string {
 }
 
 function explicitQuantity(value: string): number {
-  const labeled = /^(?:qty|quantity)\s*:\s*([1-9]\d*)$/i.exec(value);
-  const units =
-    /^(?:\d+(?:\.\d+)?\s*(?:mg|g|kg|ml|l|litres?|liters?)\s*[·•|]\s*)?([1-9]\d*)\s+unit(?:s|\(s\))?$/i.exec(
-      value,
-    );
-  const quantity = Number((labeled ?? units)?.[1]);
+  const match = QUANTITY_FIELD.exec(value);
+  const count = match?.[1] ?? match?.[2];
+  if (!count || !/^[1-9]\d*$/.test(count)) fail("ITEM_FACTS_INVALID");
+  const quantity = Number(count);
   if (!Number.isSafeInteger(quantity) || quantity < 1)
     fail("ITEM_FACTS_INVALID");
   return quantity;
@@ -234,9 +237,7 @@ export function parseNowSnapshot(
   if (!orderTotal) fail("DETAIL_TOTAL_INVALID");
   const seen = new Set<string>();
   const items = facts.items.map(({ parts, alts, hrefs }) => {
-    const quantities = parts.filter((part) =>
-      /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i.test(part),
-    );
+    const quantities = parts.filter((part) => QUANTITY_SIGNAL.test(part));
     if (quantities.length !== 1) fail("ITEM_FACTS_INVALID");
     const quantity = explicitQuantity(quantities[0]);
     const prices = parts.filter((part) => /₹|\bINR\b/i.test(part));
@@ -322,7 +323,7 @@ async function readNowDom(
   trace?: FailureDiagnostics,
 ): Promise<NowSnapshot> {
   const result = await anchor.evaluate(
-    (anchor, { expected, mode }) => {
+    (anchor, { expected, mode, quantitySignalSource, quantityFieldSource }) => {
       type DomReason = (typeof NOW_DOM_FAILURES)[number];
       type DomCheckpoint =
         | "NOW_DIALOG_IDENTITY"
@@ -340,13 +341,14 @@ async function readNowDom(
         let root: Element = anchor;
         const view = root.ownerDocument.defaultView;
         if (!view) return abort();
-        const visible = (el: Element): boolean => {
+        const rendered = (el: Element, merchandisePrice = false): boolean => {
           if (mode === "tracking" && el.closest('[role="dialog"]'))
             return false;
           for (let node: Element | null = el; node; node = node.parentElement) {
             const style = view.getComputedStyle(node);
             if (
-              node.getAttribute("aria-hidden") === "true" ||
+              (!merchandisePrice &&
+                node.getAttribute("aria-hidden") === "true") ||
               node.hasAttribute("hidden") ||
               style.display === "none" ||
               style.visibility === "hidden" ||
@@ -357,7 +359,8 @@ async function readNowDom(
           }
           return el.getClientRects().length > 0;
         };
-        const current = (el: Element): boolean => {
+        const visible = (el: Element): boolean => rendered(el);
+        const current = (el: Element, merchandisePrice = false): boolean => {
           for (let node: Element | null = el; node; node = node.parentElement) {
             if (
               ["S", "DEL", "STRIKE"].includes(node.tagName) ||
@@ -367,7 +370,7 @@ async function readNowDom(
             )
               return false;
           }
-          return visible(el);
+          return rendered(el, merchandisePrice);
         };
         const cache = new Map<Element, string>();
         const text = (el: Element): string => {
@@ -590,9 +593,8 @@ async function readNowDom(
 
         checkpoints.push("NOW_ITEMS_FEES");
         reason = "NOW_ITEM_OWNERSHIP_INVALID";
-        const quantitySignal = /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i;
-        const quantityField =
-          /^(?:(?:qty|quantity)\s*:\s*\d+|(?:\d+(?:\.\d+)?\s*(?:mg|g|kg|ml|l|litres?|liters?)\s*[·•|]\s*)?\d+\s+unit(?:s|\(s\))?)$/i;
+        const quantitySignal = new RegExp(quantitySignalSource, "i");
+        const quantityField = new RegExp(quantityFieldSource, "i");
         const productLink = 'a[href*="/dp/"], a[href*="/gp/product/"]';
         const nonItemHeadings = exact(
           root,
@@ -690,6 +692,143 @@ async function readNowDom(
               ? "NOW_ITEM_QUANTITY_MISSING"
               : "NOW_ITEM_EVIDENCE_EXCESSIVE",
           );
+        // Accessibility-hidden price components may still be visually rendered.
+        // Keep the exception confined to adjacent currency/number elements. They
+        // remain candidates until both have exactly one common merchandise owner.
+        const visualCache = new Map<Element, string>();
+        const visualPriceText = (el: Element): string => {
+          const cached = visualCache.get(el);
+          if (cached !== undefined) return cached;
+          if (excluded(el) || !current(el, true)) return "";
+          const value = Array.from(el.childNodes)
+            .map((node) =>
+              node.nodeType === 3
+                ? (node.textContent ?? "")
+                : node.nodeType === 1
+                  ? visualPriceText(node as Element)
+                  : "",
+            )
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (value.length > 50000) return abort("NOW_DOM_BOUNDS_INVALID");
+          visualCache.set(el, value);
+          return value;
+        };
+        const priceOverrides = new Map<Element, string>();
+        const priceAncestors = new Set<Element>();
+        const priceValidationRoots = new Set<Element>();
+        const renderedPairs: Array<{ currency: Element; number: Element }> = [];
+        const rowBoundary = "article, li, [role=listitem]";
+        for (const currency of nodes) {
+          if (
+            excluded(currency) ||
+            !/^(?:-\s*)?(?:₹|INR)$/i.test(visualPriceText(currency))
+          )
+            continue;
+          let sibling = currency.nextSibling;
+          while (sibling?.nodeType === 3 && !sibling.textContent?.trim())
+            sibling = sibling.nextSibling;
+          if (!sibling || sibling.nodeType !== 1) continue;
+          const number = sibling as Element;
+          const numeric = visualPriceText(number);
+          if (!/^[\d,]+(?:\.\d{1,2})?$/.test(numeric)) continue;
+          if (current(currency) && current(number)) continue; // Existing strict reader.
+          if (currency.closest(rowBoundary) !== number.closest(rowBoundary))
+            abort("NOW_ITEM_FIELDS_INVALID");
+          const parent = currency.parentElement;
+          if (!parent || excluded(number))
+            return abort("NOW_ITEM_FIELDS_INVALID");
+          const symbol = visualPriceText(currency);
+          const value = `${symbol}${/INR$/i.test(symbol) ? " " : ""}${numeric}`;
+          if (!current(parent)) {
+            // A hidden field may contain one price and an explicit price label.
+            // No qualifiers, other amounts, names or quantities may be discarded.
+            const field =
+              /^(?:(unit price|item total|line total)\s*:\s*)?((?:-\s*)?(?:₹|INR)\s*[\d,]+(?:\.\d{1,2})?)$/i.exec(
+                visualPriceText(parent),
+              );
+            if (!field) return abort("NOW_ITEM_FIELDS_INVALID");
+            priceOverrides.set(
+              parent,
+              field[1] ? `${field[1]}: ${value}` : value,
+            );
+          } else {
+            priceOverrides.set(currency, value);
+            priceOverrides.set(number, "");
+          }
+          renderedPairs.push({ currency, number });
+          if (renderedPairs.length > 200) abort("NOW_DOM_BOUNDS_INVALID");
+          priceValidationRoots.add(parent);
+          for (
+            let ancestor: Element | null = parent;
+            ancestor && root.contains(ancestor);
+            ancestor = ancestor.parentElement
+          ) {
+            priceAncestors.add(ancestor);
+            if (!current(ancestor)) priceValidationRoots.add(ancestor);
+          }
+        }
+        const uncoveredPriceText = (el: Element): string => {
+          if (!current(el, true) || priceOverrides.has(el)) return "";
+          return Array.from(el.childNodes)
+            .map((node) =>
+              node.nodeType === 3
+                ? current(el)
+                  ? ""
+                  : (node.textContent ?? "")
+                : node.nodeType === 1
+                  ? uncoveredPriceText(node as Element)
+                  : "",
+            )
+            .join(" ")
+            .trim();
+        };
+        for (const scope of priceValidationRoots)
+          if (uncoveredPriceText(scope)) abort("NOW_ITEM_FIELDS_INVALID");
+        // An unsupported rendered currency fact must not vanish behind aria-hidden.
+        for (const el of nodes) {
+          if (
+            excluded(el) ||
+            current(el) ||
+            !/₹|\bINR\b/i.test(visualPriceText(el))
+          )
+            continue;
+          if (
+            Array.from(el.children).some((child) =>
+              /₹|\bINR\b/i.test(visualPriceText(child)),
+            )
+          )
+            continue;
+          let covered: Element | null = el;
+          while (covered && !priceOverrides.has(covered) && covered !== root)
+            covered = covered.parentElement;
+          if (!covered || !priceOverrides.has(covered))
+            abort("NOW_ITEM_FIELDS_INVALID");
+        }
+        const itemCache = new Map<Element, string>();
+        const itemText = (el: Element): string => {
+          if (priceOverrides.has(el)) return priceOverrides.get(el) ?? "";
+          const cached = itemCache.get(el);
+          if (cached !== undefined) return cached;
+          if (!current(el) && !priceAncestors.has(el)) return "";
+          const value = Array.from(el.childNodes)
+            .map((node) =>
+              node.nodeType === 3
+                ? current(el)
+                  ? (node.textContent ?? "")
+                  : ""
+                : node.nodeType === 1
+                  ? itemText(node as Element)
+                  : "",
+            )
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (value.length > 50000) return abort("NOW_DOM_BOUNDS_INVALID");
+          itemCache.set(el, value);
+          return value;
+        };
         const itemRoots = new Set<Element>();
         for (const quantity of quantities) {
           let scope: Element | null = quantity;
@@ -703,11 +842,20 @@ async function readNowDom(
             if (images.filter((el) => scope?.contains(el)).length > 1)
               abort("NOW_ITEM_IMAGE_AMBIGUOUS");
             if (
-              /₹|\bINR\b/.test(text(scope)) &&
+              /₹|\bINR\b/.test(itemText(scope)) &&
               (images.some((el) => scope?.contains(el)) ||
                 productLinks.some((el) => scope?.contains(el)))
-            )
+            ) {
+              const boundary = quantity.closest(rowBoundary);
+              if (
+                renderedPairs.some((pair) => scope?.contains(pair.currency)) &&
+                boundary &&
+                root.contains(boundary) &&
+                !boundary.contains(scope)
+              )
+                abort("NOW_ITEM_BOUNDARY_INVALID");
               break;
+            }
           }
           if (
             !scope ||
@@ -725,8 +873,8 @@ async function readNowDom(
           itemRoots.add(scope);
         }
         const merchandiseEvidence = [...images, ...productLinks];
-        const priceCandidates = exact(root, /₹|\bINR\b/i).filter(
-          (el) => !excluded(el),
+        const priceCandidates = nodes.filter(
+          (el) => !excluded(el) && /₹|\bINR\b/i.test(itemText(el)),
         );
         // An incomplete row must not disappear just because its image is marked
         // presentational or missing. Every remaining current price needs an owner.
@@ -741,8 +889,7 @@ async function readNowDom(
         // Preserve the existing evidence order and exact ownership predicate.
         // Classify only the first rejection; no page-derived fact is reported.
         const unowned = merchandiseEvidence.find(
-          (el) =>
-            [...itemRoots].filter((row) => row.contains(el)).length !== 1,
+          (el) => [...itemRoots].filter((row) => row.contains(el)).length !== 1,
         );
         if (unowned)
           abort(
@@ -752,12 +899,19 @@ async function readNowDom(
                 ? "NOW_ITEM_LINK_OWNER_INVALID"
                 : "NOW_ITEM_PRICE_OWNER_INVALID",
           );
+        for (const pair of renderedPairs)
+          if (
+            [...itemRoots].filter(
+              (row) => row.contains(pair.currency) && row.contains(pair.number),
+            ).length !== 1
+          )
+            abort("NOW_ITEM_PRICE_OWNER_INVALID");
         const amount = /^(?:-\s*)?(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i;
         reason = "NOW_ITEM_FIELDS_INVALID";
         // Complete fields, or a currency node paired only with its adjacent numeric
         // sibling in the same parent. No cross-row flattening/pairing is allowed.
         const fields = (el: Element): string[] => {
-          const value = text(el);
+          const value = itemText(el);
           if (!value) return [];
           if (
             amount.test(value) ||
@@ -776,7 +930,7 @@ async function readNowDom(
               node.nodeType === 3
                 ? (node.textContent ?? "").trim()
                 : node.nodeType === 1
-                  ? text(node as Element)
+                  ? itemText(node as Element)
                   : "";
             if (!part) continue;
             if (/^(?:-\s*)?(?:₹|INR)$/i.test(part)) {
@@ -793,7 +947,7 @@ async function readNowDom(
                 sibling?.nodeType === 3
                   ? (sibling.textContent?.trim() ?? "")
                   : sibling?.nodeType === 1
-                    ? text(sibling as Element)
+                    ? itemText(sibling as Element)
                     : "";
               if (!/^[\d,]+(?:\.\d{1,2})?$/.test(number)) return abort();
               parts.push(`${part}${number}`);
@@ -828,7 +982,12 @@ async function readNowDom(
         return { unexpected: true, checkpoints };
       }
     },
-    { expected: orderId, mode },
+    {
+      expected: orderId,
+      mode,
+      quantitySignalSource: QUANTITY_SIGNAL.source,
+      quantityFieldSource: QUANTITY_FIELD.source,
+    },
     { timeout: TIMEOUT },
   );
   // Only fixed enums cross into diagnostics. Never inspect Playwright messages.

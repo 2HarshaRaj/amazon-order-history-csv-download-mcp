@@ -34,6 +34,10 @@ const original = readFileSync(
   join(__dirname, "fixtures/amazon-now-order.html"),
   "utf8",
 );
+const a11yPrices = readFileSync(
+  join(__dirname, "fixtures/amazon-now-a11y-prices.html"),
+  "utf8",
+);
 const ownership = readFileSync(
   join(__dirname, "fixtures/amazon-now-ownership.html"),
   "utf8",
@@ -244,6 +248,352 @@ browserTests("integrated Amazon Now extraction", () => {
   });
   const extract = async (trace?: FailureDiagnostics) =>
     extractNowOrder(page, id, outer, async () => {}, trace);
+
+  const a11yPair =
+    '<span class="currency">₹</span><span class="number">11.00</span>';
+  const firstA11yPrice = (replacement: string): string =>
+    a11yPrices.replace(
+      /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
+      replacement,
+    );
+
+  test("accessibility-hidden visual prices keep all 23 independent products and the billed total", async () => {
+    html = a11yPrices;
+    const detail = await extract();
+    expect(detail.items.map((item) => item.productName)).toEqual(
+      Array.from(
+        { length: 23 },
+        (_, i) => `Synthetic access item ${String(i + 1).padStart(2, "0")}`,
+      ),
+    );
+    expect(detail.items.map((item) => item.quantity)).toEqual(
+      Array(23).fill(1),
+    );
+    expect(detail.items.map((item) => item.itemTotal.amount)).toEqual(
+      Array.from({ length: 23 }, (_, i) => i + 11),
+    );
+    expect(detail).toMatchObject({
+      itemCount: 23,
+      orderTotal: { amount: 506 },
+      orderTotalSource: "amazon-now-you-pay",
+    });
+    expect(
+      detail.adjustments.map((adjustment) => adjustment.amount?.amount),
+    ).toEqual([5, -5]);
+    const document = createExportDocument(
+      options,
+      1,
+      [
+        {
+          summary: {
+            orderId: id,
+            orderDate: "2026-10-01",
+            nowDetailUrl: outer,
+          },
+          detail,
+        },
+      ],
+      new Date().toISOString(),
+    );
+    expect(document.orders[0].items.map((item) => item.lineIndex)).toEqual(
+      Array.from({ length: 23 }, (_, i) => i),
+    );
+    expect(JSON.stringify(document)).not.toMatch(
+      /999|777|Gift Card|Voucher|funding/,
+    );
+  });
+
+  test.each([
+    "250 g · 1 unit",
+    "2 kg • 1 unit",
+    "75 ml | 1 unit",
+    "0.5 l · 1 unit",
+    "Qty: 1",
+    "Quantity: 1",
+    "1 unit(s)",
+  ])(
+    "a11y row uses the complete purchased-unit grammar: %s",
+    async (quantity) => {
+      html = a11yPrices.replace("250 g · 1 unit", quantity);
+      expect((await extract()).items[0].quantity).toBe(1);
+    },
+  );
+
+  test("multiple purchased units require independently labeled hidden unit and line prices", async () => {
+    html = firstA11yPrice(
+      `<div aria-hidden="true"><div>Unit price: <span>₹</span><span>5.50</span></div><div>Line total: ${a11yPair}</div></div>`,
+    ).replace("250 g · 1 unit", "250 g · 2 units");
+    expect((await extract()).items[0]).toMatchObject({
+      quantity: 2,
+      unitPrice: { amount: 5.5 },
+      itemTotal: { amount: 11 },
+    });
+  });
+
+  test("an accessibility-hidden INR token remains an explicit currency declaration", async () => {
+    html = firstA11yPrice(
+      `<div aria-hidden="true">${a11yPair.replace(">₹<", ">INR<")}</div>`,
+    );
+    expect((await extract()).items[0].itemTotal.amount).toBe(11);
+  });
+
+  test.each(["currency", "number", "ancestor"])(
+    "only merchandise price components may bypass accessibility hiding: %s",
+    async (mode) => {
+      const pair =
+        mode === "ancestor"
+          ? `<div aria-hidden="true"><div>${a11yPair}</div></div>`
+          : `<div>${a11yPair.replace(`class="${mode}"`, `class="${mode}" aria-hidden="true"`)}</div>`;
+      html = firstA11yPrice(pair);
+      expect((await extract()).items[0].itemTotal.amount).toBe(11);
+    },
+  );
+
+  test.each([1, 2])(
+    "a11y prices retain the one-paise boundary: %s",
+    async (paise) => {
+      html = a11yPrices.replace("You pay ₹506.00", `You pay ₹506.0${paise}`);
+      if (paise === 1) expect((await extract()).orderTotal.amount).toBe(506.01);
+      else
+        await expect(extract()).rejects.toMatchObject({
+          reason: "TOTAL_MISMATCH",
+        });
+    },
+  );
+
+  test.each([
+    "duplicate",
+    "conflict",
+    "separateDuplicate",
+    "missing",
+    "historyOnly",
+    "computedHistory",
+    "hidden",
+    "displayNone",
+    "visibilityHidden",
+    "transparent",
+    "hiddenNumber",
+    "badDecimals",
+    "interveningText",
+    "interveningElement",
+    "differentRows",
+    "unowned",
+    "unsupportedWholeAmount",
+    "outsideSemanticRow",
+    "duplicateQuantity",
+    "missingQuantity",
+    "hiddenQuantity",
+    "hiddenName",
+    "hiddenImage",
+    "hiddenBillTotal",
+    "hiddenTracking",
+    "hiddenDialogID",
+    "estimatedQualifier",
+    "unusualRange",
+    "bareRange",
+    "unknownSeparator",
+    "wildcardPrefix",
+    "zeroPackage",
+    "missingCount",
+    "multipleUnitsWithoutLabels",
+    "mismatch",
+    "hiddenAncestorQualifier",
+    "hiddenExtraNumber",
+    "overlap",
+  ])(
+    "a11y %s fails closed and preserves prior JSON",
+    async (mode) => {
+      html = a11yPrices;
+      if (mode === "duplicate")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">${a11yPair}${a11yPair}</div>`,
+        );
+      if (mode === "conflict")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">${a11yPair}${a11yPair.replace("11.00", "12.00")}</div>`,
+        );
+      if (mode === "separateDuplicate")
+        html = firstA11yPrice(
+          `<div><div aria-hidden="true">${a11yPair}</div><div aria-hidden="true">${a11yPair}</div></div>`,
+        );
+      if (mode === "missing") html = firstA11yPrice("");
+      if (mode === "historyOnly")
+        html = firstA11yPrice(
+          `<div aria-hidden="true"><s>${a11yPair}</s></div>`,
+        );
+      if (mode === "computedHistory")
+        html = firstA11yPrice(
+          `<div aria-hidden="true" style="text-decoration:line-through">${a11yPair}</div>`,
+        );
+      if (mode === "hidden")
+        html = firstA11yPrice(
+          `<div aria-hidden="true" hidden>${a11yPair}</div>`,
+        );
+      if (mode === "displayNone")
+        html = firstA11yPrice(
+          `<div aria-hidden="true" style="display:none">${a11yPair}</div>`,
+        );
+      if (mode === "visibilityHidden")
+        html = firstA11yPrice(
+          `<div aria-hidden="true" style="visibility:hidden">${a11yPair}</div>`,
+        );
+      if (mode === "transparent")
+        html = firstA11yPrice(
+          `<div aria-hidden="true" style="opacity:0">${a11yPair}</div>`,
+        );
+      if (mode === "hiddenNumber")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">${a11yPair.replace('class="number"', 'class="number" hidden')}</div>`,
+        );
+      if (mode === "badDecimals")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">${a11yPair.replace("11.00", "11.001")}</div>`,
+        );
+      if (mode === "interveningText")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">${a11yPair.replace("</span><span", "</span>unrelated<span")}</div>`,
+        );
+      if (mode === "interveningElement")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">${a11yPair.replace("</span><span", "</span><small>note</small><span")}</div>`,
+        );
+      if (mode === "differentRows")
+        html = firstA11yPrice(
+          '<div aria-hidden="true"><span>₹</span></div>',
+        ).replace(
+          /<div id="a11y-price-2"[^>]*>[\s\S]*?<\/div>/,
+          '<div aria-hidden="true"><span>11.00</span></div>',
+        );
+      if (mode === "unowned")
+        html = a11yPrices.replace(
+          '<section id="a11y-bill">',
+          `<div aria-hidden="true">${a11yPair}</div><section id="a11y-bill">`,
+        );
+      if (mode === "unsupportedWholeAmount")
+        html = a11yPrices.replace(
+          '<section id="a11y-bill">',
+          '<div aria-hidden="true">₹1.00</div><section id="a11y-bill">',
+        );
+      if (mode === "outsideSemanticRow") {
+        html = firstA11yPrice("")
+          .replace(
+            /<article role="listitem" id="a11y-row-(?:[2-9]|1\d|2[0-3])">[\s\S]*?<\/article>/g,
+            "",
+          )
+          .replace(
+            "</article>",
+            `</article><div aria-hidden="true">${a11yPair}</div>`,
+          )
+          .replace(/₹506.00/g, "₹11.00");
+      }
+      if (mode === "duplicateQuantity")
+        html = html.replace(
+          "250 g · 1 unit",
+          "250 g · 1 unit<div>Qty: 2</div>",
+        );
+      if (mode === "missingQuantity") html = html.replace("250 g · 1 unit", "");
+      if (mode === "hiddenQuantity")
+        html = html.replace(
+          '<div class="quantity">',
+          '<div class="quantity" aria-hidden="true">',
+        );
+      if (mode === "hiddenName")
+        html = html.replace("<h3>", '<h3 aria-hidden="true">');
+      if (mode === "hiddenImage")
+        html = html.replace(
+          '<img alt="B0A11Y0001"',
+          '<img aria-hidden="true" alt="B0A11Y0001"',
+        );
+      if (mode === "hiddenBillTotal")
+        html = html.replace(
+          'id="a11y-total"',
+          'id="a11y-total" aria-hidden="true"',
+        );
+      if (mode === "hiddenTracking")
+        html = html.replace("<main><div>", '<main><div aria-hidden="true">');
+      if (mode === "hiddenDialogID")
+        html = html.replace(
+          'id="a11y-owner"',
+          'id="a11y-owner" aria-hidden="true"',
+        );
+      if (mode === "estimatedQualifier")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">Estimated ${a11yPair}</div>`,
+        );
+      if (mode === "unusualRange")
+        html = html.replace(
+          "250 g · 1 unit",
+          "Bundle · (100 - 200 g) · 1 unit",
+        );
+      if (mode === "bareRange")
+        html = html.replace("250 g · 1 unit", "(100-200 g) · 1 unit");
+      if (mode === "unknownSeparator")
+        html = html.replace("250 g · 1 unit", "250 g / 1 unit");
+      if (mode === "wildcardPrefix")
+        html = html.replace("250 g · 1 unit", "Unverified descriptor · 1 unit");
+      if (mode === "zeroPackage")
+        html = html.replace("250 g · 1 unit", "0 g · 1 unit");
+      if (mode === "missingCount")
+        html = html.replace("250 g · 1 unit", "250 g · unit");
+      if (mode === "multipleUnitsWithoutLabels")
+        html = html.replace("250 g · 1 unit", "250 g · 2 units");
+      if (mode === "mismatch")
+        html = html.replace("You pay ₹506.00", "You pay ₹506.02");
+      if (mode === "hiddenAncestorQualifier")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">Estimated<div>${a11yPair}</div></div>`,
+        );
+      if (mode === "hiddenExtraNumber")
+        html = firstA11yPrice(
+          `<div aria-hidden="true">${a11yPair}<span>12.00</span></div>`,
+        );
+      if (mode === "overlap") {
+        const row =
+          /<article role="listitem" id="a11y-row-1">[\s\S]*?<\/article>/.exec(
+            html,
+          )?.[0] ?? "";
+        expect(row).not.toBe("");
+        html = html
+          .replace(row, "")
+          .replace(
+            '<article role="listitem" id="a11y-row-2">',
+            `<article role="listitem" id="a11y-row-2">${row}`,
+          );
+      }
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-a11y-atomic-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Synthetic access|B0A11Y|₹|506\.00|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    15000,
+  );
 
   test("ownership fixtures cover every allowlisted subreason", () => {
     expect(ownershipImage).not.toBe("");
