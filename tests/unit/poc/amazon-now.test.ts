@@ -116,6 +116,112 @@ describe("Amazon Now fact validation (no Chromium)", () => {
     facts.items[0].parts = ["Invented item", "500 g · 2 units", "₹10.00"];
     expect(() => parseNowSnapshot(facts, id)).toThrow();
   });
+
+  test.each([
+    "Approx. (120-180 g) . 1 unit",
+    "Approx. (120-180 g) · 1 unit",
+    "Approx. (120-180 g) • 1 unit",
+    "Approx.(120-180g).1 unit",
+    "Approx. ( 120 - 180 g ) . 1 unit(s)",
+    "Approx. (0.5-1.25 g) · 1 units",
+    "Approx. (120.001-120.002 g) . 1 unit",
+    "Approx. (120.000000000000000000001-120.000000000000000000002 g) . 1 unit",
+    "Approx. (9007199254740992-9007199254740993 g) . 1 unit",
+  ])(
+    "approximate package weight never becomes purchased quantity: %s",
+    (quantity) => {
+      const facts = fixture();
+      facts.items[22].parts[1] = quantity;
+      expect(parseNowSnapshot(facts, id).items[22].quantity).toBe(1);
+    },
+  );
+
+  test.each([
+    "Approx (120-180 g) . 1 unit",
+    "Approximate. (120-180 g) . 1 unit",
+    "Estimated. (120-180 g) . 1 unit",
+    "approx. (120-180 g) . 1 unit",
+    "Bundle Approx. (120-180 g) . 1 unit",
+    "Approx. (180-120 g) . 1 unit",
+    "Approx. (120-120 g) . 1 unit",
+    "Approx. (120-120.0 g) . 1 unit",
+    "Approx. (120.01-120.001 g) . 1 unit",
+    "Approx. (120.000000000000000000002-120.000000000000000000001 g) . 1 unit",
+    "Approx. (0-180 g) . 1 unit",
+    "Approx. (0.0-180 g) . 1 unit",
+    "Approx. (-120-180 g) . 1 unit",
+    "Approx. (120--180 g) . 1 unit",
+    "Approx. (+120-180 g) . 1 unit",
+    "Approx. (1e2-180 g) . 1 unit",
+    "Approx. (0120-180 g) . 1 unit",
+    "Approx. (120-180 kg) . 1 unit",
+    "Approx. (120-180 ml) . 1 unit",
+    "Approx. (120-180) . 1 unit",
+    "Approx. (120–180 g) . 1 unit",
+    "Approx. (120−180 g) . 1 unit",
+    "Approx. 120-180 g . 1 unit",
+    "Approx. (120-180 g) 1 unit",
+    "Approx. (120-180 g) .. 1 unit",
+    "Approx. (120-180 g) .· 1 unit",
+    "Approx. (120-180 g) | 1 unit",
+    "Approx. (120-180 g) / 1 unit",
+    "Approx. (120-180 g) , 1 unit",
+    "Approx. (120-180 g) ∙ 1 unit",
+    "Approx. (120-180 g) ‧ 1 unit",
+    "Approx. (120-180 g) ⋅ 1 unit",
+    "Approx. (120-180 g) ． 1 unit",
+    "Approx. (120-180 g) . unit",
+    "Approx. (120-180 g) . 0 units",
+    "Approx. (120-180 g) . -1 unit",
+    "Approx. (120-180 g) . 1.5 units",
+    "Approx. (120-180 g) . 01 units",
+    "Approx. (120-180 g) . 9007199254740992 units",
+    "Approx. (120-180 g) . 1 unit 2 units",
+    "Approx. (120-180 g) . 1 unit trailing",
+  ])("rejects unverified or invalid approximate grammar: %s", (quantity) => {
+    const facts = fixture();
+    facts.items[22].parts[1] = quantity;
+    expect(() => parseNowSnapshot(facts, id)).toThrow();
+  });
+
+  test.each([2, 5])(
+    "approximate package endpoints cannot replace %s purchased units or price evidence",
+    (quantity) => {
+      const facts = fixture();
+      const part = `Approx. (120-180 g) . ${quantity} units`;
+      facts.items[22].parts = [
+        "Invented approximate item",
+        part,
+        `Unit price: ₹${10 / quantity}.00`,
+        "Line total: ₹10.00",
+      ];
+      expect(parseNowSnapshot(facts, id).items[22]).toMatchObject({
+        quantity,
+        unitPrice: { amount: 10 / quantity },
+        itemTotal: { amount: 10 },
+      });
+      facts.items[22].parts = ["Invented approximate item", part, "₹10.00"];
+      expect(() => parseNowSnapshot(facts, id)).toThrow();
+      facts.items[22].parts = [
+        "Invented approximate item",
+        part,
+        "Unit price: ₹9.00",
+        "Line total: ₹10.00",
+      ];
+      expect(() => parseNowSnapshot(facts, id)).toThrow();
+    },
+  );
+
+  test("approximate quantity plus another declaration remains ambiguous", () => {
+    const facts = fixture();
+    facts.items[22].parts = [
+      "Invented approximate item",
+      "Approx. (120-180 g) . 1 unit",
+      "Qty: 1",
+      "₹10.00",
+    ];
+    expect(() => parseNowSnapshot(facts, id)).toThrow();
+  });
   test("complete 23-item document with deterministic indexes and distinct provenance", () => {
     const detail = parseNowSnapshot(fixture(), id);
     expect(detail.orderTotalSource).toBe("amazon-now-you-pay");

@@ -22,6 +22,10 @@ const TIMEOUT = 3000;
 const QUANTITY_SIGNAL = /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i;
 const QUANTITY_FIELD =
   /^(?:(?:qty|quantity)\s*:\s*(\d+)|(?:(?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*(?:mg|g|kg|ml|l|litres?|liters?)\s*[·•|]\s*)?(\d+)\s+unit(?:s|\(s\))?)$/i;
+// Exact approximate-weight qualifier, ASCII range hyphen, one known separator.
+// Weight endpoints are package metadata; only capture 3 supplies purchased units.
+const APPROX_QUANTITY_FIELD =
+  /^Approx\.\s*\(\s*((?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*))\s*-\s*((?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*))\s*g\s*\)\s*[.·•]\s*([1-9]\d*)\s+unit(?:s|\(s\))?$/;
 type NowCheckpoint = (typeof NOW_CHECKPOINTS)[number];
 function checkpoint(
   trace: FailureDiagnostics | undefined,
@@ -166,7 +170,23 @@ export function normalizeNowDisplayedId(value: string): string {
 
 function explicitQuantity(value: string): number {
   const match = QUANTITY_FIELD.exec(value);
-  const count = match?.[1] ?? match?.[2];
+  const approximate = APPROX_QUANTITY_FIELD.exec(value);
+  if (approximate) {
+    // Compare positive decimal strings exactly, without rounding large or close
+    // endpoints into a different range. Never convert either endpoint to quantity.
+    const [lower, lowerFraction = ""] = approximate[1].split(".");
+    const [upper, upperFraction = ""] = approximate[2].split(".");
+    const precision = Math.max(lowerFraction.length, upperFraction.length);
+    const increasing =
+      lower.length !== upper.length
+        ? lower.length < upper.length
+        : lower !== upper
+          ? lower < upper
+          : lowerFraction.padEnd(precision, "0") <
+            upperFraction.padEnd(precision, "0");
+    if (!increasing) fail("ITEM_FACTS_INVALID");
+  }
+  const count = match?.[1] ?? match?.[2] ?? approximate?.[3];
   if (!count || !/^[1-9]\d*$/.test(count)) fail("ITEM_FACTS_INVALID");
   const quantity = Number(count);
   if (!Number.isSafeInteger(quantity) || quantity < 1)
@@ -323,7 +343,16 @@ async function readNowDom(
   trace?: FailureDiagnostics,
 ): Promise<NowSnapshot> {
   const result = await anchor.evaluate(
-    (anchor, { expected, mode, quantitySignalSource, quantityFieldSource }) => {
+    (
+      anchor,
+      {
+        expected,
+        mode,
+        quantitySignalSource,
+        quantityFieldSource,
+        approximateQuantityFieldSource,
+      },
+    ) => {
       type DomReason = (typeof NOW_DOM_FAILURES)[number];
       type DomCheckpoint =
         | "NOW_DIALOG_IDENTITY"
@@ -595,6 +624,9 @@ async function readNowDom(
         reason = "NOW_ITEM_OWNERSHIP_INVALID";
         const quantitySignal = new RegExp(quantitySignalSource, "i");
         const quantityField = new RegExp(quantityFieldSource, "i");
+        const approximateQuantityField = new RegExp(
+          approximateQuantityFieldSource,
+        );
         const productLink = 'a[href*="/dp/"], a[href*="/gp/product/"]';
         const nonItemHeadings = exact(
           root,
@@ -916,6 +948,7 @@ async function readNowDom(
           if (
             amount.test(value) ||
             quantityField.test(value) ||
+            approximateQuantityField.test(value) ||
             /^(?:unit price|item total|line total)\s*:\s*(?:₹|INR\s*)\s*[\d,.]+$/i.test(
               value,
             ) ||
@@ -987,6 +1020,7 @@ async function readNowDom(
       mode,
       quantitySignalSource: QUANTITY_SIGNAL.source,
       quantityFieldSource: QUANTITY_FIELD.source,
+      approximateQuantityFieldSource: APPROX_QUANTITY_FIELD.source,
     },
     { timeout: TIMEOUT },
   );

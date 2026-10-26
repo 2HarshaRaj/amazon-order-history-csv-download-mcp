@@ -38,6 +38,7 @@ const a11yPrices = readFileSync(
   join(__dirname, "fixtures/amazon-now-a11y-prices.html"),
   "utf8",
 );
+const approximateQuantity = "Approx. (120-180 g) . 1 unit";
 const ownership = readFileSync(
   join(__dirname, "fixtures/amazon-now-ownership.html"),
   "utf8",
@@ -302,6 +303,189 @@ browserTests("integrated Amazon Now extraction", () => {
       /999|777|Gift Card|Voucher|funding/,
     );
   });
+
+  test.each([
+    "Approx. (120-180 g) . 1 unit",
+    "Approx. (120-180 g) · 1 unit",
+    "Approx. (120-180 g) • 1 unit",
+    "Approx.(120 - 180g).1 unit(s)",
+    "Approx. (0.5-1.25 g) . 1 units",
+    "Approx. (120.000000000000000000001-120.000000000000000000002 g) . 1 unit",
+  ])("approximate row owns one purchased unit: %s", async (quantity) => {
+    html = a11yPrices.replace(approximateQuantity, quantity);
+    expect(html).toContain(quantity);
+    const detail = await extract();
+    expect(detail.items).toHaveLength(23);
+    expect(detail.items[22]).toMatchObject({
+      productName: "Synthetic access item 23",
+      quantity: 1,
+      itemTotal: { amount: 33 },
+    });
+    expect(detail).toMatchObject({
+      orderTotal: { amount: 506 },
+      orderTotalSource: "amazon-now-you-pay",
+    });
+  });
+
+  test("split approximate-weight markup remains one complete quantity field", async () => {
+    html = a11yPrices.replace(
+      approximateQuantity,
+      "<span>Approx.</span> ( <span>120</span> - <span>180</span> g ) . <span>1 unit</span>",
+    );
+    expect((await extract()).items[22].quantity).toBe(1);
+  });
+
+  test("approximate two-unit row uses its independent unit and line prices", async () => {
+    html = a11yPrices
+      .replace(approximateQuantity, "Approx. (120-180 g) . 2 units")
+      .replace(
+        /<div id="a11y-price-23"[^>]*>[\s\S]*?<\/div>/,
+        '<div aria-hidden="true"><div>Unit price: <span>₹</span><span>16.50</span></div><div>Line total: <span>₹</span><span>33.00</span></div></div>',
+      );
+    expect((await extract()).items[22]).toMatchObject({
+      quantity: 2,
+      unitPrice: { amount: 16.5 },
+      itemTotal: { amount: 33 },
+    });
+  });
+
+  test("approximate-weight fixture publishes all 23 rows through the atomic JSON pipeline", async () => {
+    html = a11yPrices;
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(join(tmpdir(), "now-approx-complete-"));
+    const output = join(directory, "orders.json");
+    const report = jest.fn(async () => {});
+    try {
+      await runExport({ ...options, output }, () => {}, {
+        list: listOrders,
+        extract: extractOrderItems,
+        write: validateAndWriteExport,
+        report,
+        cleanup: async () => {},
+      });
+      const document = JSON.parse(await readFile(output, "utf8"));
+      expect(document.orders).toHaveLength(1);
+      expect(document.orders[0].items).toHaveLength(23);
+      expect(
+        document.orders[0].items.map(
+          (item: { lineIndex: number }) => item.lineIndex,
+        ),
+      ).toEqual(Array.from({ length: 23 }, (_, i) => i));
+      expect(
+        document.orders[0].items.map(
+          (item: { quantity: number }) => item.quantity,
+        ),
+      ).toEqual(Array(23).fill(1));
+      expect(
+        document.orders[0].items.map(
+          (item: { itemTotal: number }) => item.itemTotal,
+        ),
+      ).toEqual(Array.from({ length: 23 }, (_, i) => i + 11));
+      expect(document.orders[0].orderTotal).toBe(506);
+      expect(report).not.toHaveBeenCalled();
+      expect(await readdir(directory)).toEqual(["orders.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    "Approx (120-180 g) . 1 unit",
+    "Approximate. (120-180 g) . 1 unit",
+    "Estimated. (120-180 g) . 1 unit",
+    "approx. (120-180 g) . 1 unit",
+    "Approx. (180-120 g) . 1 unit",
+    "Approx. (120-120 g) . 1 unit",
+    "Approx. (120-120.0 g) . 1 unit",
+    "Approx. (120.000000000000000000002-120.000000000000000000001 g) . 1 unit",
+    "Approx. (0-180 g) . 1 unit",
+    "Approx. (-120-180 g) . 1 unit",
+    "Approx. (120-180 kg) . 1 unit",
+    "Approx. (120–180 g) . 1 unit",
+    "Approx. (120-180 g) 1 unit",
+    "Approx. (120-180 g) .. 1 unit",
+    "Approx. (120-180 g) .· 1 unit",
+    "Approx. (120-180 g) | 1 unit",
+    "Approx. (120-180 g) ∙ 1 unit",
+    "Approx. (120-180 g) ‧ 1 unit",
+    "Approx. (120-180 g) / 1 unit",
+    "Approx. (120-180 g) . unit",
+    "Approx. (120-180 g) . 0 units",
+    "Approx. (120-180 g) . 1.5 units",
+    "Approx. (120-180 g) . 9007199254740992 units",
+    "Approx. (120-180 g) . 1 unit 2 units",
+    "Approx. (120-180 g) . 2 units",
+    "duplicate",
+    "conflicting",
+    "missingQuantity",
+    "hiddenQuantity",
+    "missingPrice",
+    "mismatchedUnitPrice",
+  ])(
+    "approximate invalid row %s preserves prior JSON",
+    async (mode) => {
+      html = a11yPrices.replace(approximateQuantity, mode);
+      if (mode === "duplicate" || mode === "conflicting")
+        html = a11yPrices.replace(
+          `<div class="quantity">${approximateQuantity}</div>`,
+          `<div class="quantity">${approximateQuantity}</div><div>Qty: ${mode === "duplicate" ? 1 : 2}</div>`,
+        );
+      if (mode === "missingQuantity")
+        html = a11yPrices
+          .replace(approximateQuantity, "")
+          .replace("You pay ₹506.00", "You pay ₹473.00");
+      if (mode === "hiddenQuantity")
+        html = a11yPrices
+          .replace(
+            `<div class="quantity">${approximateQuantity}</div>`,
+            `<div class="quantity" hidden>${approximateQuantity}</div>`,
+          )
+          .replace("You pay ₹506.00", "You pay ₹473.00");
+      if (mode === "missingPrice")
+        html = a11yPrices
+          .replace(/<div id="a11y-price-23"[^>]*>[\s\S]*?<\/div>/, "")
+          .replace("You pay ₹506.00", "You pay ₹473.00");
+      if (mode === "mismatchedUnitPrice")
+        html = a11yPrices
+          .replace(approximateQuantity, "Approx. (120-180 g) . 2 units")
+          .replace(
+            /<div id="a11y-price-23"[^>]*>[\s\S]*?<\/div>/,
+            '<div aria-hidden="true"><div>Unit price: <span>₹</span><span>17.00</span></div><div>Line total: <span>₹</span><span>33.00</span></div></div>',
+          );
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-approx-atomic-"));
+      const output = join(directory, "orders.json");
+      const logs: string[] = [];
+      await writeFile(output, "prior complete export");
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Synthetic access|Approx\.|120-180|₹|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    15000,
+  );
 
   test.each([
     "250 g · 1 unit",

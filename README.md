@@ -150,20 +150,27 @@ excluded. Identity, names, quantities, images, Bill summary and funding regions
 retain their strict visibility/accessibility rules. Accessibility-hidden bills
 or identities cannot supply missing required facts.
 
-One anchored grammar is shared by quantity field extraction and snapshot parsing:
+Anchored grammars are shared by quantity field extraction and snapshot parsing:
 `Qty: N`, `Quantity: N`, `N unit(s)`, or a positive mass/volume measurement followed
 by `·`, `•` or `|` and the explicit unit count. Supported measurement units remain
 mg/g/kg/ml/l/litre(s)/liter(s). Only the final purchased-unit count supplies
 quantity; zero/negative package measurements, range endpoints and unbounded
 prefixes do not. Discovery retains malformed quantity signals so they fail
-validation rather than disappearing. Parenthesized package ranges, unknown
-separators and the masked `WORD SEP (range) SEP count unit` presentation remain
-unsupported. Supporting that presentation requires the generic syntactic role of
-the prefix (package label versus bundle/offer), separator codepoints, range
-punctuation/unit rules, and confirmation that the suffix is the purchased-item
-count. No real product names, values or DOM are needed for that clarification.
-The invented 23-item accessibility fixture uses a supported `Quantity:` field
-for its final row; it does not claim to resolve the masked range presentation.
+validation rather than disappearing.
+
+The additional exact, case-sensitive form is
+`Approx. (lower-upper g) separator N unit(s)`. Its prefix includes the literal
+ASCII period, its parentheses and range hyphen are ASCII, and its gram endpoints
+must be positive decimal values in strictly increasing order. Endpoints are
+compared exactly as decimal strings, never rounded or used as purchased counts.
+Only the explicit final positive safe-integer `N` supplies quantity. The separator
+is exactly one ASCII period `.` (U+002E), middle dot `·` (U+00B7), or bullet `•`
+(U+2022), with optional surrounding whitespace. Pipes remain valid for standard
+package descriptors but are not accepted for this approximate-weight form.
+Other prefixes, units, range punctuation, doubled/unknown separators, missing
+counts and non-increasing ranges remain unsupported. The entirely invented
+23-item accessibility fixture now uses this approximate gram-range form for its
+final row; all 23 products retain independently sourced prices and billed total.
 
 Bill values come from individual label-bound rows, including `Inclusive of taxes`
 only as a subtitle of `You pay`; no flat sequence of unrelated tokens is paired.
