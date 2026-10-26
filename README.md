@@ -108,7 +108,7 @@ zero-based `lineIndex`, optional/empty ASIN, product name, numeric quantity,
 numeric unit and line totals, `INR`, and its safe extraction source. The export
 fails closed before file creation if a required fact is absent or invalid.
 
-For priced orders, `orderTotal` comes only from an explicit, visible `Grand Total`
+For conventional priced orders, `orderTotal` comes only from an explicit, visible `Grand Total`
 INR label/value pair in the already visited Order Details page's unique
 `#od-subtotals` summary. The final HTTPS Amazon.in detail URL must identify the
 requested order, and any explicit summary owner must match it. All eligible
@@ -116,6 +116,41 @@ Grand Total displays must agree. Missing, unreadable, hidden-only, or conflictin
 detail evidence stops export with safe `DETAIL_TOTAL_*` diagnostics; an identity
 mismatch uses `DETAIL_ORDER_MISMATCH`. Generic `Total`, subtotals, invoice amounts,
 item sums, and payment components cannot substitute for the detail Grand Total.
+
+Amazon Now uses a separate adapter in `src/poc/amazon-now.ts`. The selected
+order card supplies its actual HTTPS Amazon.in UFF/tracking details link; the
+exporter does not construct a conventional details URL for it. A single bounded
+click on the unique visible **View order details** control must open a unique,
+visible **Order Details** dialog. Pre-existing sheets are rejected. Committed
+UFF/tracking URLs must retain the exact selected Order ID, and the dialog must
+independently display that full ID once. Missing, duplicate or conflicting
+ownership stops the export.
+
+For Now, the independent billed total is the unique effective INR **Bill summary
+→ You pay** declaration, with internal provenance `amazon-now-you-pay`. Computed
+line-through prices and hidden content are excluded. The adapter retains exact
+visible product names, explicitly labeled `Qty:`/`Quantity:` values and current
+prices, with an empty ASIN when no valid associated identifier is available.
+Quantity greater than one requires both labeled **Unit price** and **Item total**
+or **Line total** declarations; the exporter never divides a line amount to
+invent a unit price. Item images anchor bounded row discovery; layouts lacking
+these semantic relationships fail closed rather than returning partial items.
+
+Explicit handling/delivery/shipping fee rows count only their effective charge;
+**Free** with a crossed-out fee contributes no adjustment. Discounts/promotions
+require an explicit negative INR amount. Included/qualified fees, refunds,
+Now cancellations, unknown bill rows, ambiguous prices and unsupported layouts
+stop export. Separate funding sections never supply totals or adjustments.
+Now items use `amazon-now-order-details` provenance and adjustments use
+`amazon-now-bill-summary`; the JSON field structure and one-paise reconciliation
+contract are unchanged. Safe failures use existing identity/validation codes or
+`NOW_EXTRACTION_FAILED`. Owner-local reports allowlist the distinct total source.
+
+Now validation in this branch uses invented static and offline Chromium fixtures,
+including a complete 23-item order. It does not establish compatibility with every
+live Now layout. Live six-order Windows validation, production synchronization,
+merge, deployment and scheduler re-enable each require separate owner approval.
+The existing Amazon Orders catch-up task must remain **Disabled**.
 
 Order-card header totals remain validated list observations, not authoritative
 gross amounts. A syntactically valid list `Total` can differ from the detail

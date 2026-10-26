@@ -19,6 +19,7 @@ import {
   listOrders,
   parseInputDate,
 } from "./hardened-index-v3";
+import { validateNowUrl } from "./amazon-now";
 
 const MAX_ORDERS = 50;
 const DEFAULT_MAX_ORDERS = 20;
@@ -71,7 +72,7 @@ export interface JsonAdjustment {
   label: string;
   amount: number;
   currency: "INR";
-  extractionSource: "order-detail-summary";
+  extractionSource: "order-detail-summary" | "amazon-now-bill-summary";
 }
 
 export interface JsonExport {
@@ -269,6 +270,7 @@ export function createExportDocument(
     // Amazon publishes no monetary facts for this explicitly cancelled shape.
     // Nulls represent unavailable values without bypassing normal reconciliation.
     const cancelledWithoutMoney =
+      summary.nowDetailUrl === undefined &&
       summary.status === "cancelled" &&
       summary.orderTotal === undefined &&
       detail.orderTotal === undefined &&
@@ -279,10 +281,15 @@ export function createExportDocument(
       detail.items.every(
         (item) => item.unitPrice === undefined && item.itemTotal === undefined,
       );
-    if (!cancelledWithoutMoney && detail.orderTotalSource !== "order-detail-grand-total")
+    const nowOrder = detail.orderTotalSource === "amazon-now-you-pay" &&
+      detail.extractionSource === "amazon-now-order-details" && summary.nowDetailUrl !== undefined;
+    if (!cancelledWithoutMoney && (summary.nowDetailUrl !== undefined
+      ? !nowOrder : detail.orderTotalSource !== "order-detail-grand-total"))
       throw new DiagnosticError(
         "validation", "ORDER_TOTAL_INVALID",
-        "Export validation failed: order total requires the Order Details Grand Total source.",
+        summary.nowDetailUrl !== undefined
+          ? "Export validation failed: order total requires the Amazon Now You pay source."
+          : "Export validation failed: order total requires the Order Details Grand Total source.",
       );
     const orderTotal = cancelledWithoutMoney
       ? null
@@ -359,7 +366,9 @@ export function createExportDocument(
       orderTotal,
       currency: CURRENCY,
       status: summary.status,
-      orderUrl: `https://www.amazon.in/gp/your-account/order-details?orderID=${encodeURIComponent(summary.orderId)}`,
+      orderUrl: nowOrder
+        ? validateNowUrl(summary.nowDetailUrl as string, summary.orderId)
+        : `https://www.amazon.in/gp/your-account/order-details?orderID=${encodeURIComponent(summary.orderId)}`,
       extractedAt,
       items,
       adjustments,

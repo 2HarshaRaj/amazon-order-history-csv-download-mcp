@@ -15,6 +15,7 @@ import { OrderHeader } from "../core/types/order";
 
 import { DiagnosticError, FailureDiagnostics } from "./failure-diagnostics";
 import { extractDetailOrderTotal, extractHeaderOrderTotal } from "./order-total";
+import { discoverNowLink, extractNowOrder } from "./amazon-now";
 
 const REGION = "in";
 const DOMAIN = "amazon.in";
@@ -39,6 +40,7 @@ export type MinimalOrder = {
   orderTotal?: ReturnType<typeof safeMoney>;
   status?: "cancelled";
   cancelledItems?: CancelledOrderListItem[];
+  nowDetailUrl?: string;
 };
 
 export type ListedOrder = Omit<MinimalOrder, "orderDateKey">;
@@ -56,7 +58,7 @@ export interface OrderAdjustment {
   type: AdjustmentType;
   label: string;
   amount: ReturnType<typeof safeMoney>;
-  extractionSource: "order-detail-summary";
+  extractionSource: "order-detail-summary" | "amazon-now-bill-summary";
 }
 
 const STRUCTURAL_TOTAL_LABEL =
@@ -367,7 +369,8 @@ function assertMatchingListedFacts(
   if (
     previous.orderDate !== current.orderDate ||
     previous.status !== current.status ||
-    amount(previous) !== amount(current)
+    amount(previous) !== amount(current) ||
+    previous.nowDetailUrl !== current.nowDetailUrl
   ) {
     throw new DiagnosticError(
       "list", "LIST_DUPLICATE_CONFLICT",
@@ -422,6 +425,7 @@ export async function parseCurrentOrderPage(
       selectedIndexes.set(orderId, orderIndex);
       diagnostics?.select(order, orderIndex);
       diagnostics?.at("list", "LIST_TOTAL_READ_FAILED");
+      order.nowDetailUrl = await discoverNowLink(card, targetPage.url(), orderId);
       const total = await extractHeaderOrderTotal(card);
       if (!total && !cancelled) {
         throw new DiagnosticError(
@@ -585,6 +589,19 @@ export async function extractOrderItems(
   const targetPage = await getPage(trace);
   trace?.at("detail", "DETAIL_NAVIGATION_FAILED");
   await requireAuthentication(targetPage);
+  if (listedOrder?.nowDetailUrl) {
+    if (listedOrder.orderId !== orderId) {
+      throw new DiagnosticError("detail", "DETAIL_ORDER_MISMATCH", "Selected order identity does not match.");
+    }
+    if (listedOrder.status === "cancelled") {
+      throw new DiagnosticError("detail", "NOW_EXTRACTION_FAILED", "Amazon Now cancellation requires independently supported order facts.");
+    }
+    trace?.provenance("amazon-now-order-details");
+    const detail = await extractNowOrder(targetPage, orderId, listedOrder.nowDetailUrl,
+      () => requireAuthentication(targetPage));
+    trace?.detail(detail);
+    return detail;
+  }
   const header = directHeader(orderId);
 
   await targetPage.goto(header.detailUrl, {

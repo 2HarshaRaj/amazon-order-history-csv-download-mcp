@@ -62,6 +62,7 @@ const reasonCodeSchema = z.enum([
   "DETAIL_TOTAL_INVALID",
   "DETAIL_TOTAL_AMBIGUOUS",
   "DETAIL_TOTAL_READ_FAILED",
+  "NOW_EXTRACTION_FAILED",
   "LIST_DETAIL_TOTAL_DIFFER",
   "ADJUSTMENT_READ_FAILED",
   "ADJUSTMENT_AMOUNT_INVALID",
@@ -196,6 +197,7 @@ export interface FailureReport {
   items: ItemEvidence[];
   adjustments: AdjustmentEvidence[];
   extractionSource?: string;
+  orderTotalSource?: "order-detail-grand-total" | "amazon-now-you-pay";
   reconciliation?: Reconciliation;
   events: DiagnosticEvent[];
   timings: StageTiming[];
@@ -242,8 +244,10 @@ const diagnosticTitle = z
 const ORDER_ID =
   /^(?:\d{3}-\d{7}-\d{7}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i;
 const ADJUSTMENT_LABEL =
-  /^(?:(?:shipping|delivery)(?: (?:charge|fee|discount|promotion))?s?|marketplace fee|discount|promotion(?: applied)?|tax|gst|vat|gift wrap|cash\s*\/\s*pay on delivery fee)$/i;
+  /^(?:(?:shipping|delivery|handling)(?: (?:charge|fee|discount|promotion))?s?|marketplace fee|discount|promotion(?: applied)?|tax|gst|vat|gift wrap|cash\s*\/\s*pay on delivery fee)$/i;
 const extractionSourceSchema = z.enum([
+  "amazon-now-order-details",
+  "amazon-now-bill-summary",
   "order-detail",
   "invoice-safe-fallback",
   "cancelled-order-list",
@@ -385,6 +389,7 @@ const failureReportSchema: z.ZodType<FailureReport> = z
       )
       .max(MAX_LINES),
     extractionSource: extractionSourceSchema.optional(),
+    orderTotalSource: z.enum(["order-detail-grand-total", "amazon-now-you-pay"]).optional(),
     reconciliation: z
       .object({
         itemsPaise: paiseSchema,
@@ -441,6 +446,8 @@ function productTitle(value: string): string | undefined {
 
 function source(value: string): string | undefined {
   return [
+    "amazon-now-order-details",
+    "amazon-now-bill-summary",
     "order-detail",
     "invoice-safe-fallback",
     "cancelled-order-list",
@@ -528,6 +535,7 @@ export class FailureDiagnostics {
   private items: ReturnType<typeof itemFacts>[] = [];
   private adjustments: ReturnType<typeof adjustmentFacts>[] = [];
   private extractionSource?: string;
+  private orderTotalSource?: FailureReport["orderTotalSource"];
   private itemCount = 0;
   private adjustmentCount = 0;
   private lineIndex?: number;
@@ -587,6 +595,7 @@ export class FailureDiagnostics {
     this.captureItems(summary.cancelledItems ?? []);
     this.captureAdjustments([]);
     this.extractionSource = undefined;
+    this.orderTotalSource = undefined;
     this.lineIndex = undefined;
     this.adjustmentIndex = undefined;
     this.reconciliation = undefined;
@@ -606,7 +615,8 @@ export class FailureDiagnostics {
     this.captureItems(detail.items);
     this.captureAdjustments(detail.adjustments);
     this.extractionSource = source(detail.extractionSource);
-    if (detail.orderTotalSource === "order-detail-grand-total") {
+    if (detail.orderTotalSource === "order-detail-grand-total" || detail.orderTotalSource === "amazon-now-you-pay") {
+      this.orderTotalSource = detail.orderTotalSource;
       this.authoritativeTotal(detail.orderTotal);
     }
   }
@@ -709,6 +719,7 @@ export class FailureDiagnostics {
       items: this.items,
       adjustments: this.adjustments,
       extractionSource: this.extractionSource,
+      orderTotalSource: this.orderTotalSource,
       reconciliation: this.reconciliation,
       events: this.events,
       timings: [

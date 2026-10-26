@@ -106,23 +106,26 @@ function fakeBrowser(scenario: Scenario) {
       count: async () => (isCard || isSummary ? 1 : 0),
       nth: () => ({
         isVisible: async () => true,
-        locator: () => ({
-          count: async () => (scenario === "missing-total" ? 0 : 1),
-          nth: () => ({
-            isVisible: async () => true,
-            getByText: () => ({
-              count: async () => (scenario === "ambiguous-total" ? 2 : 1),
-              nth: (index: number) => ({
-                locator: () => ({ count: async () => 0 }),
-                isVisible: async () => true,
-                evaluate: async (_callback: unknown, selector: string) =>
-                  selector.startsWith(".order-header"),
-                innerText: async () =>
-                  `Total\n₹${index ? "125.00" : scenario === "reconciliation" ? "200.02" : "200.00"}`,
-              }),
-            }),
-          }),
-        }),
+        locator: (nestedSelector: string) =>
+          nestedSelector.includes("/uff/")
+            ? { count: async () => 0 }
+            : {
+                count: async () => (scenario === "missing-total" ? 0 : 1),
+                nth: () => ({
+                  isVisible: async () => true,
+                  getByText: () => ({
+                    count: async () => (scenario === "ambiguous-total" ? 2 : 1),
+                    nth: (index: number) => ({
+                      locator: () => ({ count: async () => 0 }),
+                      isVisible: async () => true,
+                      evaluate: async (_callback: unknown, selector: string) =>
+                        selector.startsWith(".order-header"),
+                      innerText: async () =>
+                        `Total\n₹${index ? "125.00" : scenario === "reconciliation" ? "200.02" : "200.00"}`,
+                    }),
+                  }),
+                }),
+              },
         innerText: async () =>
           scenario === "list-facts"
             ? "unrecognized synthetic card"
