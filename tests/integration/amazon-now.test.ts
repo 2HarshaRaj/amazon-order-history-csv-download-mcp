@@ -6,6 +6,10 @@ import { join } from "path";
 import { chromium, Browser, BrowserContext, Page } from "playwright";
 import { extractNowOrder } from "../../src/poc/amazon-now";
 import {
+  FailureDiagnostics,
+  writeFailureReport,
+} from "../../src/poc/failure-diagnostics";
+import {
   AuthenticationRequiredError,
   closeBrowser,
   extractOrderItems,
@@ -93,7 +97,242 @@ browserTests("integrated Amazon Now extraction", () => {
     await context.close();
     jest.restoreAllMocks();
   });
-  const extract = async () => extractNowOrder(page, id, outer, async () => {});
+  const extract = async (trace?: FailureDiagnostics) =>
+    extractNowOrder(page, id, outer, async () => {}, trace);
+
+  test.each(["tracking", "dialog"])(
+    "exact %s identity rejection remains attributable without exposing IDs",
+    async (mode) => {
+      html =
+        mode === "tracking"
+          ? html.replace(`ORDER ID:${id}`, "ORDER ID:111-2222222-4444444")
+          : html.replace(
+              `<span>${id}</span>`,
+              "<span>111-2222222-4444444</span>",
+            );
+      const trace = new FailureDiagnostics();
+      const error = await extract(trace).catch((e: unknown) => e);
+      expect(error).toMatchObject({ reason: "DETAIL_ORDER_MISMATCH" });
+      const events = trace.report(error).events;
+      expect(
+        events.some(
+          (event) =>
+            event.reason ===
+            (mode === "tracking"
+              ? "NOW_TRACKING_IDENTITY"
+              : "NOW_DIALOG_IDENTITY"),
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(events)).not.toMatch(/111-|https?:|₹/);
+      if (mode === "tracking") {
+        expect(events.some((event) => event.reason === "NOW_DIALOG_OPEN")).toBe(
+          false,
+        );
+        expect(await page.locator("#now-sheet").isVisible()).toBe(false);
+      }
+    },
+  );
+
+  test("unexpected in-page exceptions are discarded with the last internal checkpoint", async () => {
+    html += `<script>
+      const image = document.querySelector('#fixture-items img');
+      const get = image.getAttribute.bind(image);
+      image.getAttribute = (name) => {
+        if (name === 'alt') throw new Error('PRIVATE_DOM_EXCEPTION cookie=secret ₹999.99');
+        return get(name);
+      };
+    </script>`;
+    const trace = new FailureDiagnostics();
+    const error = await extract(trace).catch((e: unknown) => e);
+    expect(trace.report(error).failure).toMatchObject({
+      reason: "NOW_ITEMS_FEES",
+      category: "operation-failed",
+    });
+    expect(JSON.stringify(trace.report(error)) + String(error)).not.toMatch(
+      /PRIVATE_DOM_EXCEPTION|cookie|999\.99|₹|https?:/,
+    );
+  });
+
+  test.each([
+    ["bounds", "NOW_DOM_BOUNDS_INVALID"],
+    ["trackingIdentity", "NOW_TRACKING_IDENTITY_INVALID"],
+    ["dialogIdentity", "NOW_DIALOG_IDENTITY_INVALID"],
+    ["status", "NOW_ORDER_STATUS_UNSUPPORTED"],
+    ["billSummary", "NOW_BILL_SUMMARY_INVALID"],
+    ["billRow", "NOW_BILL_ROW_INVALID"],
+    ["ownership", "NOW_ITEM_OWNERSHIP_INVALID"],
+    ["fields", "NOW_ITEM_FIELDS_INVALID"],
+  ])(
+    "categorical DOM failure %s persists without page content",
+    async (mode, reason) => {
+      if (mode === "bounds")
+        html = html.replace("<h1>", `${"<i></i>".repeat(5001)}<h1>`);
+      if (mode === "trackingIdentity")
+        html = html.replace(`ORDER ID:${id}`, "Tracking information");
+      if (mode === "dialogIdentity")
+        html = html.replace(
+          "<h1>Order Details</h1>",
+          `<h1>Order Details</h1><div>Order ID: ${id}</div>`,
+        );
+      if (mode === "status")
+        html = html.replace(
+          "<h1>Order Details</h1>",
+          "<h1>Order Details</h1><div>Refund pending</div>",
+        );
+      if (mode === "billSummary")
+        html = html.replace("<h2>Bill summary</h2>", "<h2>Other summary</h2>");
+      if (mode === "billRow")
+        html = html.replace(
+          "<h2>Bill summary</h2>",
+          "<h2>Bill summary</h2><div>Unknown charged fact ₹9.00</div>",
+        );
+      if (mode === "ownership") html = html.replace("<div>Qty: 1</div>", "");
+      if (mode === "fields")
+        html = html.replace(
+          "<span>₹10.00</span>",
+          "<span>₹</span><span>invalid amount</span>",
+        );
+      const trace = new FailureDiagnostics();
+      trace.select({ orderId: "not supplied", orderDate: "not supplied" }, 2);
+      trace.provenance("amazon-now-order-details");
+      const error = await extract(trace).catch((e: unknown) => e);
+      expect(error).toMatchObject({ reason, category: "validation" });
+      const report = trace.report(error);
+      expect(report).toMatchObject({
+        failure: { reason },
+        order: { orderIndex: 2 },
+        counts: { items: 0, adjustments: 0 },
+      });
+      expect(report.events.at(-1)).toMatchObject({
+        reason,
+        orderIndex: 2,
+        category: "validation",
+      });
+      const directory = await mkdtemp(join(tmpdir(), "now-dom-report-"));
+      try {
+        await writeFailureReport(report, directory);
+        const names = await readdir(directory);
+        expect(names).toHaveLength(1);
+        const saved = await readFile(join(directory, names[0]), "utf8");
+        expect(JSON.parse(saved).failure.reason).toBe(reason);
+        expect(saved + String(error)).not.toMatch(
+          /111-|Invented|₹|230\.00|https?:|<html>|invalid amount|Unknown charged fact/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+      if (mode === "trackingIdentity")
+        expect(await page.locator("#now-sheet").isVisible()).toBe(false);
+    },
+  );
+
+  test.each([
+    "navigation",
+    "control",
+    "open",
+    "parser",
+    "fees",
+    "reconciliation",
+  ])(
+    "checkpoint identifies %s failure without changing rejection",
+    async (mode) => {
+      if (mode === "navigation")
+        redirect = tracking.replace(id, "111-2222222-4444444");
+      if (mode === "control")
+        html = html.replace(
+          "View order details</button>",
+          "View order details</button><button>View order details</button>",
+        );
+      if (mode === "open")
+        html = html.replace(
+          "document.querySelector('#now-sheet').style.display='block'",
+          "void 0",
+        );
+      if (mode === "parser") html = html.replace("Qty: 1", "Qty: 0");
+      if (mode === "fees")
+        html = html.replace(
+          "Handling fee <span>Free</span>",
+          "Handling fee <span>Included ₹5.00</span>",
+        );
+      if (mode === "reconciliation")
+        html = html.replace(
+          "<span>₹230.00</span><s>₹460.00</s>",
+          "<span>₹230.02</span><s>₹460.00</s>",
+        );
+      const trace = new FailureDiagnostics();
+      const error = await extract(trace).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(Error);
+      const report = trace.report(error);
+      const expected =
+        mode === "navigation"
+          ? "NOW_NAVIGATION"
+          : mode === "control"
+            ? "NOW_DETAILS_CONTROL"
+            : mode === "open"
+              ? "NOW_DIALOG_OPEN"
+              : "NOW_PARSING";
+      expect(report.events.some((event) => event.reason === expected)).toBe(
+        true,
+      );
+      expect(report.failure.category).toBe(
+        mode === "open" ? "timeout" : "validation",
+      );
+      if (mode === "reconciliation")
+        expect(report.failure.reason).toBe("TOTAL_MISMATCH");
+      expect(JSON.stringify(report)).not.toMatch(
+        /111-|Invented|₹|230\.00|https?:|<html>/,
+      );
+    },
+    10000,
+  );
+
+  test("integrated exporter persists the categorical checkpoint and preserves prior JSON", async () => {
+    html = html.replace(
+      "<h2>Bill summary</h2>",
+      "<h2>Unsupported summary</h2>",
+    );
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(join(tmpdir(), "now-diagnostic-pipeline-"));
+    const output = join(directory, "orders.json");
+    const reports = join(directory, "reports");
+    await writeFile(output, "prior complete export");
+    const logs: string[] = [];
+    try {
+      await expect(
+        runExport(
+          { ...options, output },
+          (message) => {
+            logs.push(message);
+          },
+          {
+            list: listOrders,
+            extract: extractOrderItems,
+            write: validateAndWriteExport,
+            report: (report) => writeFailureReport(report, reports),
+            cleanup: async () => {},
+          },
+        ),
+      ).rejects.toMatchObject({ reason: "NOW_BILL_SUMMARY_INVALID" });
+      expect(await readFile(output, "utf8")).toBe("prior complete export");
+      expect((await readdir(directory)).sort()).toEqual([
+        "orders.json",
+        "reports",
+      ]);
+      const names = await readdir(reports);
+      expect(names).toHaveLength(1);
+      const saved = JSON.parse(await readFile(join(reports, names[0]), "utf8"));
+      expect(saved.failure.reason).toBe("NOW_BILL_SUMMARY_INVALID");
+      expect(saved.events.at(-1)).toMatchObject({
+        reason: "NOW_BILL_SUMMARY_INVALID",
+        orderIndex: 0,
+      });
+      expect(JSON.stringify(saved.events) + logs.join(" ")).not.toMatch(
+        /111-|Invented|₹|230\.00|https?:|<html>/,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 
   test("plain delivery decoration and explanatory waived fee export the complete invented order", async () => {
     html = statusFeePresentation;
@@ -206,7 +445,7 @@ browserTests("integrated Amazon Now extraction", () => {
       )
       .replace('id="effective-total">736.00', 'id="effective-total">715.00');
     await expect(extract()).rejects.toMatchObject({
-      reason: "NOW_EXTRACTION_FAILED",
+      reason: "NOW_ITEM_OWNERSHIP_INVALID",
     });
   });
 

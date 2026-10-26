@@ -212,6 +212,24 @@ Console output and scheduled operational logs contain only stage/reason codes,
 counts, and whether the report was saved. Exit status remains 1 on failure;
 authentication failures still leave Chromium open for manual sign-in.
 
+Amazon Now adds categorical checkpoints to the existing bounded event list:
+`NOW_NAVIGATION`, `NOW_DETAILS_CONTROL`, `NOW_TRACKING_IDENTITY`,
+`NOW_DIALOG_OPEN`, `NOW_DIALOG_IDENTITY`, `NOW_BILL_SUMMARY`,
+`NOW_ITEMS_FEES`, and `NOW_PARSING`. These record entry into an operation,
+not proof that it succeeded. The DOM reader returns only allowlisted failure
+categories for diagnostics: `NOW_DOM_BOUNDS_INVALID`,
+`NOW_TRACKING_IDENTITY_INVALID`, `NOW_DIALOG_IDENTITY_INVALID`,
+`NOW_ORDER_STATUS_UNSUPPORTED`, `NOW_BILL_SUMMARY_INVALID`,
+`NOW_BILL_ROW_INVALID`, `NOW_ITEM_OWNERSHIP_INVALID`, and
+`NOW_ITEM_FIELDS_INVALID`. Parsing/reconciliation retains its existing exact
+reason codes, including `TOTAL_MISMATCH`. Playwright timeouts retain category
+`timeout`; unexpected errors use `operation-failed` without their messages or
+stacks. A transport failure during the DOM read can only identify the entered
+read operation; internal checkpoints are available when the bounded read returns.
+These additions contain only fixed codes, elapsed time and the selected order
+index, without adding IDs, amounts, product text, URLs or page content. They do
+not change extraction acceptance rules or capture partial snapshots as evidence.
+
 Reports contain available validated order IDs, dates/cancellation status, the
 zero-based selected order index, product names/ASINs, quantities, monetary facts
 in integer paise, adjustments, extraction/fallback sources, bounded technical

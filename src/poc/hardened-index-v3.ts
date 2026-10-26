@@ -598,7 +598,7 @@ export async function extractOrderItems(
     }
     trace?.provenance("amazon-now-order-details");
     const detail = await extractNowOrder(targetPage, orderId, listedOrder.nowDetailUrl,
-      () => requireAuthentication(targetPage));
+      () => requireAuthentication(targetPage), trace);
     trace?.detail(detail);
     return detail;
   }

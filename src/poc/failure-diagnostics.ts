@@ -44,6 +44,28 @@ const failureStageSchema = z.enum([
 ]);
 export type FailureStage = z.infer<typeof failureStageSchema>;
 
+/** Fixed Amazon Now codes only; no page-derived labels or exception text. */
+export const NOW_CHECKPOINTS = [
+  "NOW_NAVIGATION",
+  "NOW_TRACKING_IDENTITY",
+  "NOW_DETAILS_CONTROL",
+  "NOW_DIALOG_OPEN",
+  "NOW_DIALOG_IDENTITY",
+  "NOW_BILL_SUMMARY",
+  "NOW_ITEMS_FEES",
+  "NOW_PARSING",
+] as const;
+export const NOW_DOM_FAILURES = [
+  "NOW_DOM_BOUNDS_INVALID",
+  "NOW_TRACKING_IDENTITY_INVALID",
+  "NOW_DIALOG_IDENTITY_INVALID",
+  "NOW_ORDER_STATUS_UNSUPPORTED",
+  "NOW_BILL_SUMMARY_INVALID",
+  "NOW_BILL_ROW_INVALID",
+  "NOW_ITEM_OWNERSHIP_INVALID",
+  "NOW_ITEM_FIELDS_INVALID",
+] as const;
+
 const reasonCodeSchema = z.enum([
   "BROWSER_OPEN_FAILED",
   "LIST_NAVIGATION_FAILED",
@@ -63,6 +85,8 @@ const reasonCodeSchema = z.enum([
   "DETAIL_TOTAL_AMBIGUOUS",
   "DETAIL_TOTAL_READ_FAILED",
   "NOW_EXTRACTION_FAILED",
+  ...NOW_CHECKPOINTS,
+  ...NOW_DOM_FAILURES,
   "LIST_DETAIL_TOTAL_DIFFER",
   "ADJUSTMENT_READ_FAILED",
   "ADJUSTMENT_AMOUNT_INVALID",
@@ -209,7 +233,7 @@ function category(
   authenticationRequired: boolean,
 ): FailureReport["failure"]["category"] {
   if (authenticationRequired) return "authentication";
-  if (error instanceof DiagnosticError) return "validation";
+  if (error instanceof DiagnosticError) return error.category;
   if (error instanceof Error) {
     if (error.name === "TimeoutError") return "timeout";
     const code = (error as NodeJS.ErrnoException).code;
@@ -516,6 +540,7 @@ export class DiagnosticError extends Error {
     readonly stage: FailureStage,
     readonly reason: ReasonCode,
     message: string,
+    readonly category: "validation" | "timeout" | "operation-failed" = "validation",
   ) {
     super(message);
   }

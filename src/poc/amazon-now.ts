@@ -1,7 +1,12 @@
 /// <reference lib="dom" />
 import type { Frame, Locator, Page } from "playwright";
 import { z } from "zod";
-import { DiagnosticError } from "./failure-diagnostics";
+import {
+  DiagnosticError,
+  FailureDiagnostics,
+  NOW_CHECKPOINTS,
+  NOW_DOM_FAILURES,
+} from "./failure-diagnostics";
 import { parseHeaderTotalText } from "./order-total";
 import type { OrderAdjustment } from "./hardened-index-v3";
 
@@ -12,6 +17,14 @@ const NOW_PATHS = [
   "/tez/browse/orderTracking",
 ];
 const TIMEOUT = 3000;
+type NowCheckpoint = (typeof NOW_CHECKPOINTS)[number];
+function checkpoint(
+  trace: FailureDiagnostics | undefined,
+  code: NowCheckpoint,
+): void {
+  trace?.at("detail", code);
+  trace?.note("detail", code);
+}
 
 function fail(
   reason:
@@ -306,465 +319,535 @@ async function readNowDom(
   anchor: Locator,
   orderId: string,
   mode: "tracking" | "dialog",
+  trace?: FailureDiagnostics,
 ): Promise<NowSnapshot> {
-  return anchor.evaluate(
+  const result = await anchor.evaluate(
     (anchor, { expected, mode }) => {
-      const abort = (): never => {
-        throw new Error("Unsupported Amazon Now presentation.");
-      };
-      let root: Element = anchor;
-      const view = root.ownerDocument.defaultView;
-      if (!view) return abort();
-      const visible = (el: Element): boolean => {
-        if (mode === "tracking" && el.closest('[role="dialog"]')) return false;
-        for (let node: Element | null = el; node; node = node.parentElement) {
-          const style = view.getComputedStyle(node);
-          if (
-            node.getAttribute("aria-hidden") === "true" ||
-            node.hasAttribute("hidden") ||
-            style.display === "none" ||
-            style.visibility === "hidden" ||
-            style.visibility === "collapse" ||
-            style.opacity === "0"
-          )
-            return false;
-        }
-        return el.getClientRects().length > 0;
-      };
-      const current = (el: Element): boolean => {
-        for (let node: Element | null = el; node; node = node.parentElement) {
-          if (
-            ["S", "DEL", "STRIKE"].includes(node.tagName) ||
-            view
-              .getComputedStyle(node)
-              .textDecorationLine.includes("line-through")
-          )
-            return false;
-        }
-        return visible(el);
-      };
-      const cache = new Map<Element, string>();
-      const text = (el: Element): string => {
-        const cached = cache.get(el);
-        if (cached !== undefined) return cached;
-        if (!current(el)) return "";
-        const value = Array.from(el.childNodes)
-          .map((node) =>
-            node.nodeType === 3
-              ? (node.textContent ?? "")
-              : node.nodeType === 1
-                ? text(node as Element)
-                : "",
-          )
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim();
-        if (value.length > 50000) return abort();
-        cache.set(el, value);
-        return value;
-      };
-      const elements = (scope: Element): Element[] => {
-        const nodes = [scope, ...Array.from(scope.querySelectorAll("*"))];
-        if (nodes.length > 5000) abort();
-        return nodes;
-      };
-      const leaves = (scope: Element): Element[] =>
-        elements(scope).filter((el) => {
-          const value = text(el);
-          return (
-            value &&
-            !Array.from(el.children).some((child) => text(child) === value)
-          );
-        });
-      const exact = (scope: Element, pattern: RegExp): Element[] =>
-        leaves(scope).filter((el) => pattern.test(text(el)));
-      if (mode === "tracking") {
-        // The chosen control and the labeled tracking identity must share a small
-        // source region. A URL or a hidden sheet never supplies that identity.
-        let found = false;
-        for (let depth = 0; depth < 8; depth++) {
-          if (["BODY", "HTML"].includes(root.tagName)) abort();
-          if (exact(root, /^Order ID\b/i).length) {
-            found = true;
-            break;
-          }
-          const parent = root.parentElement;
-          if (!parent) return abort();
-          root = parent;
-        }
-        if (!found) abort();
-      } else if (exact(root, /^Order Details$/i).length !== 1) abort();
-      const nodes = elements(root);
-      const owner = root.closest("[data-order-id]");
-      if (owner && owner.getAttribute("data-order-id") !== expected) abort();
-      if (
-        nodes.some(
-          (el) =>
-            visible(el) &&
-            el.hasAttribute("data-order-id") &&
-            el.getAttribute("data-order-id") !== expected,
-        )
-      )
-        abort();
-      const identityRows = new Set<Element>();
-      const wholeId = /^Order ID(?:\s*:\s*|\s+)(#?\s*\S+)$/i;
-      for (const label of exact(root, /^Order ID\s*:?$/i)) {
-        let scope: Element | null = label;
-        for (
-          let depth = 0;
-          scope && depth < 5;
-          depth++, scope = scope.parentElement
-        ) {
-          if (!root.contains(scope)) break;
-          if (wholeId.test(text(scope))) {
-            identityRows.add(scope);
-            break;
-          }
-        }
-        if (!scope || !identityRows.has(scope)) abort();
+      type DomReason = (typeof NOW_DOM_FAILURES)[number];
+      type DomCheckpoint =
+        | "NOW_DIALOG_IDENTITY"
+        | "NOW_BILL_SUMMARY"
+        | "NOW_ITEMS_FEES";
+      const checkpoints: DomCheckpoint[] = [];
+      let reason: DomReason = "NOW_DOM_BOUNDS_INVALID";
+      class DomValidationFailure {
+        constructor(readonly reason: DomReason) {}
       }
-      for (const el of exact(root, wholeId)) identityRows.add(el);
-      const orderIds = [...identityRows].map(
-        (el) => wholeId.exec(text(el))?.[1] ?? "",
-      );
-      if (orderIds.length !== 1) abort();
-      if (mode === "tracking") return { orderIds, billRows: [], items: [] };
-      if (
-        exact(
-          root,
-          /\b(?:cancelled|canceled|refunded|refund pending|partially refunded)\b/i,
-        ).length
-      )
-        abort();
-
-      const headings = exact(root, /^Bill summary$/i);
-      if (headings.length !== 1) abort();
-      let bill: Element | null = headings[0].parentElement;
-      for (
-        let depth = 0;
-        bill && bill !== root && depth < 6;
-        depth++, bill = bill.parentElement
-      ) {
-        if (exact(bill, /^You pay\b/i).length) break;
-      }
-      if (
-        !bill ||
-        bill === root ||
-        /\bPayment(?: method| details| information)?\b/i.test(text(bill))
-      )
-        return abort();
-      const billRoot = bill;
-      const billLabel =
-        /^(You pay|Items? total|Items? subtotal|Subtotal|Handling (?:fee|charge)s?|Delivery (?:fee|charge)s?|Shipping (?:fee|charge)s?|Discount|Promotion(?: applied)?)(?=\s|:|$)/i;
-      const labelCandidates = leaves(billRoot).filter((el) =>
-        billLabel.test(text(el)),
-      );
-      const labels = labelCandidates.filter(
-        (el) =>
-          !labelCandidates.some((child) => child !== el && el.contains(child)),
-      );
-      const billRegions = new Set<Element>();
-      const billRows = labels.map((label) => {
-        const name = billLabel.exec(text(label))?.[1];
-        if (!name) return abort();
-        let scope: Element | null = label;
-        for (
-          let depth = 0;
-          scope && scope !== billRoot && depth < 5;
-          depth++, scope = scope.parentElement
-        ) {
-          if (/₹|\bINR\b|\bFree\b(?!\s+for\b)/i.test(text(scope))) break;
-        }
+      const abort = (code: DomReason = reason): never => {
+        throw new DomValidationFailure(code);
+      };
+      const read = (): NowSnapshot => {
+        let root: Element = anchor;
+        const view = root.ownerDocument.defaultView;
+        if (!view) return abort();
+        const visible = (el: Element): boolean => {
+          if (mode === "tracking" && el.closest('[role="dialog"]'))
+            return false;
+          for (let node: Element | null = el; node; node = node.parentElement) {
+            const style = view.getComputedStyle(node);
+            if (
+              node.getAttribute("aria-hidden") === "true" ||
+              node.hasAttribute("hidden") ||
+              style.display === "none" ||
+              style.visibility === "hidden" ||
+              style.visibility === "collapse" ||
+              style.opacity === "0"
+            )
+              return false;
+          }
+          return el.getClientRects().length > 0;
+        };
+        const current = (el: Element): boolean => {
+          for (let node: Element | null = el; node; node = node.parentElement) {
+            if (
+              ["S", "DEL", "STRIKE"].includes(node.tagName) ||
+              view
+                .getComputedStyle(node)
+                .textDecorationLine.includes("line-through")
+            )
+              return false;
+          }
+          return visible(el);
+        };
+        const cache = new Map<Element, string>();
+        const text = (el: Element): string => {
+          const cached = cache.get(el);
+          if (cached !== undefined) return cached;
+          if (!current(el)) return "";
+          const value = Array.from(el.childNodes)
+            .map((node) =>
+              node.nodeType === 3
+                ? (node.textContent ?? "")
+                : node.nodeType === 1
+                  ? text(node as Element)
+                  : "",
+            )
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (value.length > 50000) return abort("NOW_DOM_BOUNDS_INVALID");
+          cache.set(el, value);
+          return value;
+        };
+        const elements = (scope: Element): Element[] => {
+          const nodes = [scope, ...Array.from(scope.querySelectorAll("*"))];
+          if (nodes.length > 5000) abort("NOW_DOM_BOUNDS_INVALID");
+          return nodes;
+        };
+        const leaves = (scope: Element): Element[] =>
+          elements(scope).filter((el) => {
+            const value = text(el);
+            return (
+              value &&
+              !Array.from(el.children).some((child) => text(child) === value)
+            );
+          });
+        const exact = (scope: Element, pattern: RegExp): Element[] =>
+          leaves(scope).filter((el) => pattern.test(text(el)));
+        reason =
+          mode === "tracking"
+            ? "NOW_TRACKING_IDENTITY_INVALID"
+            : "NOW_DIALOG_IDENTITY_INVALID";
+        if (mode === "dialog") checkpoints.push("NOW_DIALOG_IDENTITY");
+        if (mode === "tracking") {
+          // The chosen control and the labeled tracking identity must share a small
+          // source region. A URL or a hidden sheet never supplies that identity.
+          let found = false;
+          for (let depth = 0; depth < 8; depth++) {
+            if (["BODY", "HTML"].includes(root.tagName)) abort();
+            if (exact(root, /^Order ID\b/i).length) {
+              found = true;
+              break;
+            }
+            const parent = root.parentElement;
+            if (!parent) return abort();
+            root = parent;
+          }
+          if (!found) abort();
+        } else if (exact(root, /^Order Details$/i).length !== 1) abort();
+        const nodes = elements(root);
+        const owner = root.closest("[data-order-id]");
+        if (owner && owner.getAttribute("data-order-id") !== expected) abort();
         if (
-          !scope ||
-          scope === billRoot ||
-          labels.filter((el) => scope?.contains(el)).length !== 1
-        )
-          return abort();
-        const row = scope;
-        if (
-          [...billRegions].some(
-            (other) => row.contains(other) || other.contains(row),
+          nodes.some(
+            (el) =>
+              visible(el) &&
+              el.hasAttribute("data-order-id") &&
+              el.getAttribute("data-order-id") !== expected,
           )
         )
-          return abort();
-        billRegions.add(row);
-        let value = text(row)
-          .slice(name.length)
-          .replace(/^\s*:\s*/, "")
-          .trim();
-        const explanations = exact(row, /^Free for$/i);
-        if (explanations.length) {
-          // A separate annotation/icon group is not an effective fee value.
-          // Never strip amounts, or accept an annotation in place of a charge.
-          if (
-            !/^Handling (?:fee|charge)s?$/i.test(name) ||
-            explanations.length !== 1 ||
-            (value.match(/\bFree for\b/gi) ?? []).length !== 1
-          )
-            return abort();
-          let annotation: Element | null = explanations[0];
-          let bounded = false;
+          abort();
+        const identityRows = new Set<Element>();
+        const wholeId = /^Order ID(?:\s*:\s*|\s+)(#?\s*\S+)$/i;
+        for (const label of exact(root, /^Order ID\s*:?$/i)) {
+          let scope: Element | null = label;
           for (
             let depth = 0;
-            annotation && annotation !== row && depth < 3;
-            depth++, annotation = annotation.parentElement
+            scope && depth < 5;
+            depth++, scope = scope.parentElement
           ) {
-            if (!/^Free for$/i.test(text(annotation))) break;
-            if (annotation.querySelectorAll("img, svg").length === 1) {
-              bounded = true;
+            if (!root.contains(scope)) break;
+            if (wholeId.test(text(scope))) {
+              identityRows.add(scope);
               break;
             }
           }
-          if (!bounded) return abort();
-          value = value
-            .replace(/\bFree for\b/i, "")
-            .replace(/\s+/g, " ")
-            .trim();
+          if (!scope || !identityRows.has(scope)) abort();
         }
-        const subtitles = value.match(/\bInclusive of taxes\b/gi) ?? [];
-        if (subtitles.length) {
-          if (!/^You pay$/i.test(name) || subtitles.length !== 1)
-            return abort();
-          value = value
-            .replace(/\bInclusive of taxes\b/i, "")
-            .replace(/\s+/g, " ")
-            .trim();
-        }
-        return `${name} ${value}`;
-      });
-      // Every current bill fact must belong to one recognized row or its heading.
-      // Unknown charges, standalone values and tender rows cannot disappear.
-      const uncovered = (el: Element): string => {
-        if (!current(el) || billRegions.has(el) || el === headings[0])
-          return "";
-        return Array.from(el.childNodes)
-          .map((node) =>
-            node.nodeType === 3
-              ? (node.textContent ?? "")
-              : node.nodeType === 1
-                ? uncovered(node as Element)
-                : "",
-          )
-          .join(" ")
-          .trim();
-      };
-      if (uncovered(billRoot)) abort();
-
-      const quantitySignal = /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i;
-      const quantityField =
-        /^(?:(?:qty|quantity)\s*:\s*\d+|(?:\d+(?:\.\d+)?\s*(?:mg|g|kg|ml|l|litres?|liters?)\s*[·•|]\s*)?\d+\s+unit(?:s|\(s\))?)$/i;
-      const productLink = 'a[href*="/dp/"], a[href*="/gp/product/"]';
-      const nonItemHeadings = exact(
-        root,
-        /^(?:Payment(?: (?:method|details|information))?|Delivery status|Order status|Status)$/i,
-      );
-      const nonItemRoots = [
-        ...nonItemHeadings,
-        ...nodes.filter(
-          (el) => el.getAttribute("role") === "status" && visible(el),
-        ),
-      ].map((heading) => {
-        const semantic = heading.closest(
-          'section, [role="group"], [role="status"]',
+        for (const el of exact(root, wholeId)) identityRows.add(el);
+        const orderIds = [...identityRows].map(
+          (el) => wholeId.exec(text(el))?.[1] ?? "",
         );
-        const scope =
-          semantic && semantic !== root ? semantic : heading.parentElement;
+        if (orderIds.length !== 1) abort();
+        if (mode === "tracking") return { orderIds, billRows: [], items: [] };
+        reason = "NOW_ORDER_STATUS_UNSUPPORTED";
         if (
-          !scope ||
-          scope === root ||
-          scope.contains(billRoot) ||
-          exact(scope, quantitySignal).length ||
-          Array.from(scope.querySelectorAll(productLink)).some(visible) ||
-          Array.from(scope.querySelectorAll("img")).some(
-            (image) =>
-              visible(image) &&
-              /^[A-Z0-9]{10}$/.test(image.getAttribute("alt") ?? ""),
-          )
+          exact(
+            root,
+            /\b(?:cancelled|canceled|refunded|refund pending|partially refunded)\b/i,
+          ).length
         )
-          return abort();
-        return scope;
-      });
-      // A heading/role is not required for an isolated delivery-time decoration.
-      // Only a complete delivery message plus one icon may form this region;
-      // item/list boundaries and any financial/product evidence disqualify it.
-      const deliveryMessage =
-        /^(?:Order\s+)?delivered\s+in\s+[1-9]\d*\s+(?:min(?:ute)?s?|h(?:ou)?rs?)(?:\s+(?:and\s+)?\d+\s+min(?:ute)?s?)?$/i;
-      const merchandiseBoundary = "article, li, [role=list], [role=listitem]";
-      for (const message of exact(root, deliveryMessage)) {
-        const itemAncestor = message.closest(merchandiseBoundary);
-        if (itemAncestor && root.contains(itemAncestor)) continue;
-        let scope: Element | null = message;
+          abort();
+
+        checkpoints.push("NOW_BILL_SUMMARY");
+        reason = "NOW_BILL_SUMMARY_INVALID";
+        const headings = exact(root, /^Bill summary$/i);
+        if (headings.length !== 1) abort();
+        let bill: Element | null = headings[0].parentElement;
         for (
           let depth = 0;
-          scope && scope !== root && depth < 4;
-          depth++, scope = scope.parentElement
+          bill && bill !== root && depth < 6;
+          depth++, bill = bill.parentElement
         ) {
-          if (text(scope) !== text(message)) break;
-          const icons = Array.from(scope.querySelectorAll("img")).filter(
-            visible,
-          );
-          if (
-            icons.length !== 1 ||
-            scope.contains(billRoot) ||
-            scope.querySelector(merchandiseBoundary) ||
-            scope.querySelector(productLink) ||
-            Array.from(scope.querySelectorAll("*")).some(
-              (el) => el.textContent?.trim() && !current(el),
-            ) ||
-            /^[A-Z0-9]{10}$/.test(icons[0].getAttribute("alt") ?? "")
-          )
-            continue;
-          nonItemRoots.push(scope);
-          break;
-        }
-      }
-      nonItemRoots.push(billRoot);
-      const excluded = (el: Element): boolean =>
-        nonItemRoots.some((scope) => scope.contains(el));
-      const images = nodes.filter(
-        (el) =>
-          el.tagName === "IMG" &&
-          visible(el) &&
-          !excluded(el) &&
-          el.getAttribute("role") !== "presentation",
-      );
-      const productLinks = nodes.filter(
-        (el) => el.matches(productLink) && visible(el) && !excluded(el),
-      );
-      const quantityCandidates = exact(root, quantitySignal).filter(
-        (el) => !excluded(el),
-      );
-      const quantities = quantityCandidates.filter(
-        (el) =>
-          !quantityCandidates.some(
-            (child) => child !== el && el.contains(child),
-          ),
-      );
-      if (!quantities.length || quantities.length > 100 || images.length > 100)
-        abort();
-      const itemRoots = new Set<Element>();
-      for (const quantity of quantities) {
-        let scope: Element | null = quantity;
-        for (
-          let depth = 0;
-          scope && scope !== root && depth < 7;
-          depth++, scope = scope.parentElement
-        ) {
-          if (quantities.filter((el) => scope?.contains(el)).length !== 1)
-            abort();
-          if (images.filter((el) => scope?.contains(el)).length > 1) abort();
-          if (
-            /₹|\bINR\b/.test(text(scope)) &&
-            (images.some((el) => scope?.contains(el)) ||
-              productLinks.some((el) => scope?.contains(el)))
-          )
-            break;
+          if (exact(bill, /^You pay\b/i).length) break;
         }
         if (
-          !scope ||
-          scope === root ||
-          excluded(scope) ||
-          nonItemRoots.some((other) => scope?.contains(other))
+          !bill ||
+          bill === root ||
+          /\bPayment(?: method| details| information)?\b/i.test(text(bill))
         )
           return abort();
-        if (
-          [...itemRoots].some(
-            (other) => scope?.contains(other) || other.contains(scope),
-          )
-        )
-          return abort();
-        itemRoots.add(scope);
-      }
-      const merchandiseEvidence = [...images, ...productLinks];
-      const priceCandidates = exact(root, /₹|\bINR\b/i).filter(
-        (el) => !excluded(el),
-      );
-      // An incomplete row must not disappear just because its image is marked
-      // presentational or missing. Every remaining current price needs an owner.
-      merchandiseEvidence.push(
-        ...priceCandidates.filter(
+        const billRoot = bill;
+        reason = "NOW_BILL_ROW_INVALID";
+        const billLabel =
+          /^(You pay|Items? total|Items? subtotal|Subtotal|Handling (?:fee|charge)s?|Delivery (?:fee|charge)s?|Shipping (?:fee|charge)s?|Discount|Promotion(?: applied)?)(?=\s|:|$)/i;
+        const labelCandidates = leaves(billRoot).filter((el) =>
+          billLabel.test(text(el)),
+        );
+        const labels = labelCandidates.filter(
           (el) =>
-            !priceCandidates.some(
+            !labelCandidates.some(
               (child) => child !== el && el.contains(child),
             ),
-        ),
-      );
-      if (
-        merchandiseEvidence.some(
-          (el) => [...itemRoots].filter((row) => row.contains(el)).length !== 1,
-        )
-      )
-        abort();
-      const amount = /^(?:-\s*)?(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i;
-      // Complete fields, or a currency node paired only with its adjacent numeric
-      // sibling in the same parent. No cross-row flattening/pairing is allowed.
-      const fields = (el: Element): string[] => {
-        const value = text(el);
-        if (!value) return [];
-        if (
-          amount.test(value) ||
-          quantityField.test(value) ||
-          /^(?:unit price|item total|line total)\s*:\s*(?:₹|INR\s*)\s*[\d,.]+$/i.test(
-            value,
-          ) ||
-          !/₹|\bINR\b|\b(?:qty|quantity)\s*:|\b\d+\s+units?\b/i.test(value)
-        )
-          return [value];
-        const children = Array.from(el.childNodes);
-        const parts: string[] = [];
-        for (let index = 0; index < children.length; index++) {
-          const node = children[index];
-          const part =
-            node.nodeType === 3
-              ? (node.textContent ?? "").trim()
-              : node.nodeType === 1
-                ? text(node as Element)
-                : "";
-          if (!part) continue;
-          if (/^(?:-\s*)?(?:₹|INR)$/i.test(part)) {
-            // Whitespace-only text nodes may separate adjacent rendered elements.
-            let next = index + 1;
-            while (
-              next < children.length &&
-              children[next].nodeType === 3 &&
-              !children[next].textContent?.trim()
+        );
+        const billRegions = new Set<Element>();
+        const billRows = labels.map((label) => {
+          const name = billLabel.exec(text(label))?.[1];
+          if (!name) return abort();
+          let scope: Element | null = label;
+          for (
+            let depth = 0;
+            scope && scope !== billRoot && depth < 5;
+            depth++, scope = scope.parentElement
+          ) {
+            if (/₹|\bINR\b|\bFree\b(?!\s+for\b)/i.test(text(scope))) break;
+          }
+          if (
+            !scope ||
+            scope === billRoot ||
+            labels.filter((el) => scope?.contains(el)).length !== 1
+          )
+            return abort();
+          const row = scope;
+          if (
+            [...billRegions].some(
+              (other) => row.contains(other) || other.contains(row),
             )
-              next++;
-            const sibling = children[next];
-            const number =
-              sibling?.nodeType === 3
-                ? (sibling.textContent?.trim() ?? "")
-                : sibling?.nodeType === 1
-                  ? text(sibling as Element)
-                  : "";
-            if (!/^[\d,]+(?:\.\d{1,2})?$/.test(number)) return abort();
-            parts.push(`${part}${number}`);
-            index = next;
-          } else if (node.nodeType === 1)
-            parts.push(...fields(node as Element));
-          else parts.push(part);
-        }
-        return parts;
-      };
-      const items = [...itemRoots].map((row) => ({
-        parts: fields(row),
-        alts: images
-          .filter((el) => row.contains(el))
-          .map((el) => el.getAttribute("alt") ?? ""),
-        hrefs: Array.from(row.querySelectorAll("a[href]"))
-          .filter(visible)
-          .map(
-            (el) =>
-              new URL(el.getAttribute("href") ?? "", root.ownerDocument.URL)
-                .href,
+          )
+            return abort();
+          billRegions.add(row);
+          let value = text(row)
+            .slice(name.length)
+            .replace(/^\s*:\s*/, "")
+            .trim();
+          const explanations = exact(row, /^Free for$/i);
+          if (explanations.length) {
+            // A separate annotation/icon group is not an effective fee value.
+            // Never strip amounts, or accept an annotation in place of a charge.
+            if (
+              !/^Handling (?:fee|charge)s?$/i.test(name) ||
+              explanations.length !== 1 ||
+              (value.match(/\bFree for\b/gi) ?? []).length !== 1
+            )
+              return abort();
+            let annotation: Element | null = explanations[0];
+            let bounded = false;
+            for (
+              let depth = 0;
+              annotation && annotation !== row && depth < 3;
+              depth++, annotation = annotation.parentElement
+            ) {
+              if (!/^Free for$/i.test(text(annotation))) break;
+              if (annotation.querySelectorAll("img, svg").length === 1) {
+                bounded = true;
+                break;
+              }
+            }
+            if (!bounded) return abort();
+            value = value
+              .replace(/\bFree for\b/i, "")
+              .replace(/\s+/g, " ")
+              .trim();
+          }
+          const subtitles = value.match(/\bInclusive of taxes\b/gi) ?? [];
+          if (subtitles.length) {
+            if (!/^You pay$/i.test(name) || subtitles.length !== 1)
+              return abort();
+            value = value
+              .replace(/\bInclusive of taxes\b/i, "")
+              .replace(/\s+/g, " ")
+              .trim();
+          }
+          return `${name} ${value}`;
+        });
+        // Every current bill fact must belong to one recognized row or its heading.
+        // Unknown charges, standalone values and tender rows cannot disappear.
+        const uncovered = (el: Element): string => {
+          if (!current(el) || billRegions.has(el) || el === headings[0])
+            return "";
+          return Array.from(el.childNodes)
+            .map((node) =>
+              node.nodeType === 3
+                ? (node.textContent ?? "")
+                : node.nodeType === 1
+                  ? uncovered(node as Element)
+                  : "",
+            )
+            .join(" ")
+            .trim();
+        };
+        if (uncovered(billRoot)) abort();
+
+        checkpoints.push("NOW_ITEMS_FEES");
+        reason = "NOW_ITEM_OWNERSHIP_INVALID";
+        const quantitySignal = /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i;
+        const quantityField =
+          /^(?:(?:qty|quantity)\s*:\s*\d+|(?:\d+(?:\.\d+)?\s*(?:mg|g|kg|ml|l|litres?|liters?)\s*[·•|]\s*)?\d+\s+unit(?:s|\(s\))?)$/i;
+        const productLink = 'a[href*="/dp/"], a[href*="/gp/product/"]';
+        const nonItemHeadings = exact(
+          root,
+          /^(?:Payment(?: (?:method|details|information))?|Delivery status|Order status|Status)$/i,
+        );
+        const nonItemRoots = [
+          ...nonItemHeadings,
+          ...nodes.filter(
+            (el) => el.getAttribute("role") === "status" && visible(el),
           ),
-      }));
-      return { orderIds, billRows, items };
+        ].map((heading) => {
+          const semantic = heading.closest(
+            'section, [role="group"], [role="status"]',
+          );
+          const scope =
+            semantic && semantic !== root ? semantic : heading.parentElement;
+          if (
+            !scope ||
+            scope === root ||
+            scope.contains(billRoot) ||
+            exact(scope, quantitySignal).length ||
+            Array.from(scope.querySelectorAll(productLink)).some(visible) ||
+            Array.from(scope.querySelectorAll("img")).some(
+              (image) =>
+                visible(image) &&
+                /^[A-Z0-9]{10}$/.test(image.getAttribute("alt") ?? ""),
+            )
+          )
+            return abort();
+          return scope;
+        });
+        // A heading/role is not required for an isolated delivery-time decoration.
+        // Only a complete delivery message plus one icon may form this region;
+        // item/list boundaries and any financial/product evidence disqualify it.
+        const deliveryMessage =
+          /^(?:Order\s+)?delivered\s+in\s+[1-9]\d*\s+(?:min(?:ute)?s?|h(?:ou)?rs?)(?:\s+(?:and\s+)?\d+\s+min(?:ute)?s?)?$/i;
+        const merchandiseBoundary = "article, li, [role=list], [role=listitem]";
+        for (const message of exact(root, deliveryMessage)) {
+          const itemAncestor = message.closest(merchandiseBoundary);
+          if (itemAncestor && root.contains(itemAncestor)) continue;
+          let scope: Element | null = message;
+          for (
+            let depth = 0;
+            scope && scope !== root && depth < 4;
+            depth++, scope = scope.parentElement
+          ) {
+            if (text(scope) !== text(message)) break;
+            const icons = Array.from(scope.querySelectorAll("img")).filter(
+              visible,
+            );
+            if (
+              icons.length !== 1 ||
+              scope.contains(billRoot) ||
+              scope.querySelector(merchandiseBoundary) ||
+              scope.querySelector(productLink) ||
+              Array.from(scope.querySelectorAll("*")).some(
+                (el) => el.textContent?.trim() && !current(el),
+              ) ||
+              /^[A-Z0-9]{10}$/.test(icons[0].getAttribute("alt") ?? "")
+            )
+              continue;
+            nonItemRoots.push(scope);
+            break;
+          }
+        }
+        nonItemRoots.push(billRoot);
+        const excluded = (el: Element): boolean =>
+          nonItemRoots.some((scope) => scope.contains(el));
+        const images = nodes.filter(
+          (el) =>
+            el.tagName === "IMG" &&
+            visible(el) &&
+            !excluded(el) &&
+            el.getAttribute("role") !== "presentation",
+        );
+        const productLinks = nodes.filter(
+          (el) => el.matches(productLink) && visible(el) && !excluded(el),
+        );
+        const quantityCandidates = exact(root, quantitySignal).filter(
+          (el) => !excluded(el),
+        );
+        const quantities = quantityCandidates.filter(
+          (el) =>
+            !quantityCandidates.some(
+              (child) => child !== el && el.contains(child),
+            ),
+        );
+        if (
+          !quantities.length ||
+          quantities.length > 100 ||
+          images.length > 100
+        )
+          abort();
+        const itemRoots = new Set<Element>();
+        for (const quantity of quantities) {
+          let scope: Element | null = quantity;
+          for (
+            let depth = 0;
+            scope && scope !== root && depth < 7;
+            depth++, scope = scope.parentElement
+          ) {
+            if (quantities.filter((el) => scope?.contains(el)).length !== 1)
+              abort();
+            if (images.filter((el) => scope?.contains(el)).length > 1) abort();
+            if (
+              /₹|\bINR\b/.test(text(scope)) &&
+              (images.some((el) => scope?.contains(el)) ||
+                productLinks.some((el) => scope?.contains(el)))
+            )
+              break;
+          }
+          if (
+            !scope ||
+            scope === root ||
+            excluded(scope) ||
+            nonItemRoots.some((other) => scope?.contains(other))
+          )
+            return abort();
+          if (
+            [...itemRoots].some(
+              (other) => scope?.contains(other) || other.contains(scope),
+            )
+          )
+            return abort();
+          itemRoots.add(scope);
+        }
+        const merchandiseEvidence = [...images, ...productLinks];
+        const priceCandidates = exact(root, /₹|\bINR\b/i).filter(
+          (el) => !excluded(el),
+        );
+        // An incomplete row must not disappear just because its image is marked
+        // presentational or missing. Every remaining current price needs an owner.
+        merchandiseEvidence.push(
+          ...priceCandidates.filter(
+            (el) =>
+              !priceCandidates.some(
+                (child) => child !== el && el.contains(child),
+              ),
+          ),
+        );
+        if (
+          merchandiseEvidence.some(
+            (el) =>
+              [...itemRoots].filter((row) => row.contains(el)).length !== 1,
+          )
+        )
+          abort();
+        const amount = /^(?:-\s*)?(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i;
+        reason = "NOW_ITEM_FIELDS_INVALID";
+        // Complete fields, or a currency node paired only with its adjacent numeric
+        // sibling in the same parent. No cross-row flattening/pairing is allowed.
+        const fields = (el: Element): string[] => {
+          const value = text(el);
+          if (!value) return [];
+          if (
+            amount.test(value) ||
+            quantityField.test(value) ||
+            /^(?:unit price|item total|line total)\s*:\s*(?:₹|INR\s*)\s*[\d,.]+$/i.test(
+              value,
+            ) ||
+            !/₹|\bINR\b|\b(?:qty|quantity)\s*:|\b\d+\s+units?\b/i.test(value)
+          )
+            return [value];
+          const children = Array.from(el.childNodes);
+          const parts: string[] = [];
+          for (let index = 0; index < children.length; index++) {
+            const node = children[index];
+            const part =
+              node.nodeType === 3
+                ? (node.textContent ?? "").trim()
+                : node.nodeType === 1
+                  ? text(node as Element)
+                  : "";
+            if (!part) continue;
+            if (/^(?:-\s*)?(?:₹|INR)$/i.test(part)) {
+              // Whitespace-only text nodes may separate adjacent rendered elements.
+              let next = index + 1;
+              while (
+                next < children.length &&
+                children[next].nodeType === 3 &&
+                !children[next].textContent?.trim()
+              )
+                next++;
+              const sibling = children[next];
+              const number =
+                sibling?.nodeType === 3
+                  ? (sibling.textContent?.trim() ?? "")
+                  : sibling?.nodeType === 1
+                    ? text(sibling as Element)
+                    : "";
+              if (!/^[\d,]+(?:\.\d{1,2})?$/.test(number)) return abort();
+              parts.push(`${part}${number}`);
+              index = next;
+            } else if (node.nodeType === 1)
+              parts.push(...fields(node as Element));
+            else parts.push(part);
+          }
+          return parts;
+        };
+        const items = [...itemRoots].map((row) => ({
+          parts: fields(row),
+          alts: images
+            .filter((el) => row.contains(el))
+            .map((el) => el.getAttribute("alt") ?? ""),
+          hrefs: Array.from(row.querySelectorAll("a[href]"))
+            .filter(visible)
+            .map(
+              (el) =>
+                new URL(el.getAttribute("href") ?? "", root.ownerDocument.URL)
+                  .href,
+            ),
+        }));
+        return { orderIds, billRows, items };
+      };
+      try {
+        return { facts: read(), checkpoints };
+      } catch (error) {
+        if (error instanceof DomValidationFailure)
+          return { failure: error.reason, checkpoints };
+        // Unknown DOM errors must never cross the browser boundary with content.
+        return { unexpected: true, checkpoints };
+      }
     },
     { expected: orderId, mode },
     { timeout: TIMEOUT },
   );
+  // Only fixed enums cross into diagnostics. Never inspect Playwright messages.
+  for (const code of z
+    .array(z.enum(NOW_CHECKPOINTS))
+    .max(3)
+    .parse(result.checkpoints))
+    checkpoint(trace, code);
+  if (result.unexpected)
+    throw new DiagnosticError(
+      "detail",
+      result.checkpoints.at(-1) ??
+        (mode === "tracking" ? "NOW_TRACKING_IDENTITY" : "NOW_DIALOG_IDENTITY"),
+      "Amazon Now DOM read failed.",
+      "operation-failed",
+    );
+  if (result.failure !== undefined) {
+    const code = z.enum(NOW_DOM_FAILURES).parse(result.failure);
+    throw new DiagnosticError(
+      "detail",
+      code,
+      "Amazon Now DOM validation failed.",
+    );
+  }
+  if (!result.facts)
+    throw new DiagnosticError(
+      "detail",
+      "NOW_EXTRACTION_FAILED",
+      "Amazon Now DOM read failed.",
+    );
+  return result.facts;
 }
 
 export async function extractNowOrder(
@@ -772,8 +855,14 @@ export async function extractNowOrder(
   orderId: string,
   outerUrl: string,
   authenticate: () => Promise<void>,
+  trace?: FailureDiagnostics,
 ): Promise<NowOrderDetail> {
   let invalidNavigation = false;
+  let phase: NowCheckpoint = "NOW_NAVIGATION";
+  const at = (code: NowCheckpoint): void => {
+    phase = code;
+    checkpoint(trace, code);
+  };
   // Observe only committed main-frame URLs, never requests, responses or tender
   // traffic. Intermediate UFF/tracking pages must retain the selected identity.
   const checkNavigation = (frame: Frame): void => {
@@ -792,6 +881,7 @@ export async function extractNowOrder(
     }
   };
   try {
+    at("NOW_NAVIGATION");
     validateNowUrl(outerUrl, orderId);
     page.on("framenavigated", checkNavigation);
     await page.goto(outerUrl, {
@@ -809,6 +899,7 @@ export async function extractNowOrder(
     if (invalidNavigation) fail();
     await authenticate();
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
+    at("NOW_DETAILS_CONTROL");
     const dialogs = page
       .locator('[role="dialog"]:visible')
       .filter({ has: page.getByText(/^Order Details$/i) });
@@ -819,7 +910,13 @@ export async function extractNowOrder(
       .filter({ visible: true });
     await controls.first().waitFor({ state: "visible", timeout: TIMEOUT });
     if ((await controls.count()) !== 1) fail();
-    const trackingFacts = await readNowDom(controls, orderId, "tracking");
+    at("NOW_TRACKING_IDENTITY");
+    const trackingFacts = await readNowDom(
+      controls,
+      orderId,
+      "tracking",
+      trace,
+    );
     if (
       trackingFacts.orderIds.length !== 1 ||
       normalizeNowDisplayedId(trackingFacts.orderIds[0]) !== orderId
@@ -832,34 +929,67 @@ export async function extractNowOrder(
       (await dialogs.count())
     )
       fail();
+    at("NOW_DIALOG_OPEN");
     await controls.click({ timeout: TIMEOUT });
     await dialogs.first().waitFor({ state: "visible", timeout: TIMEOUT });
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
-    const facts = await readNowDom(dialogs.first(), orderId, "dialog");
+    at("NOW_DIALOG_IDENTITY");
+    const facts = await readNowDom(dialogs.first(), orderId, "dialog", trace);
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
+    at("NOW_PARSING");
     return parseNowSnapshot(facts, orderId);
   } catch (error) {
     // A sign-in redirect after the click must preserve manual-authentication
     // lifecycle behavior, including leaving the dedicated window open.
-    const currentUrl = new URL(page.url());
+    let currentUrl: URL | undefined;
+    try {
+      currentUrl = new URL(page.url());
+    } catch {
+      /* Unavailable URL is not evidence. */
+    }
     if (
-      currentUrl.protocol === "https:" &&
+      currentUrl?.protocol === "https:" &&
       ["www.amazon.in", "amazon.in"].includes(currentUrl.hostname) &&
       /^\/ap\/(?:signin|cvf)(?:\/|$)/.test(currentUrl.pathname)
     )
-      await authenticate();
+      await authenticate().catch((authError: unknown) => {
+        if (
+          authError instanceof Error &&
+          authError.name === "AuthenticationRequiredError"
+        ) {
+          trace?.note("detail", "AUTHENTICATION_REQUIRED");
+          throw authError;
+        }
+        throw new DiagnosticError(
+          "detail",
+          phase,
+          "Amazon Now authentication check failed.",
+          authError instanceof Error && authError.name === "TimeoutError"
+            ? "timeout"
+            : "operation-failed",
+        );
+      });
     if (
       error instanceof DiagnosticError ||
       (error instanceof Error && error.name === "AuthenticationRequiredError")
-    )
+    ) {
+      if (error instanceof DiagnosticError)
+        trace?.noteFailure(error.stage, error.reason, error);
+      else trace?.note("detail", "AUTHENTICATION_REQUIRED");
       throw error;
+    }
     // Playwright errors can contain raw DOM and URLs. Keep them out of MCP/logs.
-    throw new DiagnosticError(
+    const safeError = new DiagnosticError(
       "detail",
-      "NOW_EXTRACTION_FAILED",
+      phase,
       "Amazon Now extraction could not validate all required facts.",
+      error instanceof Error && error.name === "TimeoutError"
+        ? "timeout"
+        : "operation-failed",
     );
+    trace?.noteFailure("detail", phase, safeError);
+    throw safeError;
   } finally {
     page.off("framenavigated", checkNavigation);
   }
