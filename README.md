@@ -146,10 +146,18 @@ product evidence. All remaining product links, images and current prices must
 belong to those rows. Separately named delivery/status/payment regions and
 explicitly presentational images do not become products; incomplete rows,
 overlap, duplicates and unrecognized image/price ownership fail closed.
+Heading-free delivery-time messages can own an isolated single icon without a
+status role. This requires a complete delivered-duration message outside item/list
+boundaries, with no product links, ASIN candidates or financial evidence in that
+container. Other unowned images still fail closed.
 
 Explicit handling/delivery/shipping fee rows count only their effective charge;
-**Free** with a crossed-out fee contributes no adjustment. Discounts/promotions
-require an explicit negative INR amount. Included/qualified fees, refunds,
+**Free** with a crossed-out fee contributes no adjustment. A handling-fee `Free for`
+caption is accepted only in its own bounded caption/icon group; the row must
+still declare a separate,
+unambiguous effective **Free** or INR charge. The caption cannot replace a missing
+charge or hide conflicting current values. Discounts/promotions remain separate
+rows with explicit negative INR amounts. Included/qualified fees, refunds,
 Now cancellations, unknown bill rows, ambiguous prices and unsupported layouts
 stop export. Separate funding sections never supply totals or adjustments.
 Now items use `amazon-now-order-details` provenance and adjustments use
@@ -158,9 +166,11 @@ contract are unchanged. Safe failures use existing identity/validation codes or
 `NOW_EXTRACTION_FAILED`. Owner-local reports allowlist the distinct total source.
 
 Now validation in this branch uses invented static and offline Chromium fixtures,
-including two complete 23-item presentations. It does not establish compatibility with every
-live Now layout. Live six-order Windows validation, production synchronization,
-merge, deployment and scheduler re-enable each require separate owner approval.
+including two complete 23-item presentations and an additional invented component
+fixture for heading-free status and explanatory fees. This does not establish
+compatibility with every live Now layout. Live six-order Windows validation,
+production synchronization, merge, deployment and scheduler re-enable each
+require separate owner approval.
 The existing Amazon Orders catch-up task must remain **Disabled**.
 
 Order-card header totals remain validated list observations, not authoritative

@@ -33,6 +33,13 @@ const presentation = readFileSync(
   join(__dirname, "fixtures/amazon-now-presentation.html"),
   "utf8",
 );
+const [plainStatus, explanatoryFee] = readFileSync(
+  join(__dirname, "fixtures/amazon-now-status-fee.html"),
+  "utf8",
+).split("<!-- handling-row -->");
+const statusFeePresentation = presentation
+  .replace(/<section id="delivery-status">[\s\S]*?<\/section>/, plainStatus)
+  .replace(/<div id="handling">[\s\S]*?<\/div>/, explanatoryFee);
 const list = `<div class="order-card"><div class="order-header">Order placed 1 October 2026<div>Total ₹230.00</div><span>${id}</span></div><a href="${outer}">View order details</a></div>`;
 const options = {
   startDate: "2026-10-01",
@@ -87,6 +94,275 @@ browserTests("integrated Amazon Now extraction", () => {
     jest.restoreAllMocks();
   });
   const extract = async () => extractNowOrder(page, id, outer, async () => {});
+
+  test("plain delivery decoration and explanatory waived fee export the complete invented order", async () => {
+    html = statusFeePresentation;
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const [summary] = (await listOrders(options.startDate, options.endDate, 5))
+      .orders;
+    const detail = await extractOrderItems(id, undefined, summary);
+    expect(
+      await page.locator("#plain-delivery-message").getAttribute("role"),
+    ).toBeNull();
+    expect(
+      await page.getByText("Delivery status", { exact: true }).count(),
+    ).toBe(0);
+    expect(detail.items).toHaveLength(23);
+    expect(detail.items.map((item) => item.quantity)).toEqual(
+      Array(23).fill(1),
+    );
+    expect(detail.items.map((item) => item.itemTotal?.amount)).toEqual(
+      Array.from({ length: 23 }, (_, index) => index + 21),
+    );
+    expect(detail.items[0].asin).toBe("B0FAKE0001");
+    expect(detail.items[3].asin).toBe("");
+    expect(detail.orderTotal?.amount).toBe(736);
+    expect(detail.orderTotalSource).toBe("amazon-now-you-pay");
+    expect(detail.adjustments).toEqual([]);
+    const document = createExportDocument(
+      options,
+      1,
+      [{ summary, detail }],
+      new Date().toISOString(),
+    );
+    expect(document.orders[0].items.map((item) => item.lineIndex)).toEqual(
+      Array.from({ length: 23 }, (_, index) => index),
+    );
+    expect(JSON.stringify(document)).not.toMatch(
+      /Free for|Delivery time icon|Voucher|Gift Cards|999/,
+    );
+  });
+
+  test.each([
+    "Delivered in 7 minutes",
+    "Delivered in 42 mins",
+    "Order delivered in 2 hours and 5 minutes",
+    "Delivered in 1 hr",
+    "delivered in 18 min",
+  ])("isolated icon ownership supports %s", async (message) => {
+    html = statusFeePresentation.replace("Delivered in 23 minutes", message);
+    expect((await extract()).items).toHaveLength(23);
+  });
+
+  test.each([
+    "unrecognized",
+    "extraIcon",
+    "productLink",
+    "productAsin",
+    "merchandiseBoundary",
+    "financialEvidence",
+    "otherHistoricalEvidence",
+    "hiddenMessage",
+    "conflictingOwner",
+  ])("plain status cannot conceal %s", async (mode) => {
+    let status = plainStatus;
+    if (mode === "unrecognized")
+      status = status.replace(
+        "Delivered in 23 minutes",
+        "Delivery information",
+      );
+    if (mode === "extraIcon") status = status.replace(/(<img[^>]+>)/, "$1$1");
+    if (mode === "productLink")
+      status = status.replace(
+        "<span>Delivered",
+        '<a href="/dp/B0FAKE0099"></a><span>Delivered',
+      );
+    if (mode === "productAsin")
+      status = status.replace('alt="Delivery time icon"', 'alt="B0FAKE0099"');
+    if (mode === "merchandiseBoundary")
+      status = status.replace(
+        'id="plain-delivery-message"',
+        'id="plain-delivery-message" role="listitem"',
+      );
+    if (mode === "financialEvidence")
+      status = status.replace("</div>", "<s>₹21.00</s></div>");
+    if (mode === "otherHistoricalEvidence")
+      status = status.replace("</div>", "<s>$21.00</s></div>");
+    if (mode === "hiddenMessage")
+      status = status.replace("<span>Delivered", "<span hidden>Delivered");
+    if (mode === "conflictingOwner")
+      status = status.replace(
+        'id="plain-delivery-message"',
+        'id="plain-delivery-message" data-order-id="111-2222222-4444444"',
+      );
+    html = statusFeePresentation.replace(plainStatus, status);
+    await expect(extract()).rejects.toThrow();
+  });
+
+  test("a merchandise row resembling a status decoration is never omitted, even if omission would reconcile", async () => {
+    html = statusFeePresentation
+      .replace(
+        /<article role="listitem" id="invented-row-1">[\s\S]*?<\/article>/,
+        (row) =>
+          row
+            .replace('alt="B0FAKE0001"', 'alt="Delivery time icon"')
+            .replace("Fictional market item 01", "Delivered in 31 minutes")
+            .replace(/<div class="package">[\s\S]*?<\/div>/, "")
+            .replace(/<del>[\s\S]*?<\/del>/, "")
+            .replace(
+              '<span class="effective-symbol">₹</span><span class="effective-number">21.00</span>',
+              "",
+            ),
+      )
+      .replace('id="effective-total">736.00', 'id="effective-total">715.00');
+    await expect(extract()).rejects.toMatchObject({
+      reason: "NOW_EXTRACTION_FAILED",
+    });
+  });
+
+  test.each(["missingQuantity", "missingPrice", "unownedImage"])(
+    "new decorations retain rejection of %s",
+    async (mode) => {
+      html = statusFeePresentation;
+      if (mode === "missingQuantity")
+        html = html.replace("500 g · <span>1 unit</span>", "500 g");
+      if (mode === "missingPrice")
+        html = html.replace(
+          '<span class="effective-symbol">₹</span><span class="effective-number">21.00</span>',
+          "",
+        );
+      if (mode === "unownedImage")
+        html = html.replace(
+          '<div role="list"',
+          '<img alt="Unowned merchandise image" width="20" height="20" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><div role="list"',
+        );
+      await expect(extract()).rejects.toThrow();
+    },
+  );
+
+  test.each([
+    "missingCharge",
+    "hiddenCharge",
+    "duplicateFree",
+    "freeAndCharge",
+    "unmarkedOriginal",
+    "annotationAmount",
+    "duplicateAnnotation",
+    "missingIcon",
+    "mergedCharge",
+    "unknownAnnotation",
+    "annotationOnTotal",
+  ])("explanatory handling row rejects %s", async (mode) => {
+    let fee = explanatoryFee;
+    if (mode === "missingCharge")
+      fee = fee.replace('<strong id="effective-handling">Free</strong>', "");
+    if (mode === "hiddenCharge")
+      fee = fee.replace(
+        'id="effective-handling"',
+        'id="effective-handling" hidden',
+      );
+    if (mode === "duplicateFree")
+      fee = fee.replace("</strong>", "</strong><span>Free</span>");
+    if (mode === "freeAndCharge")
+      fee = fee.replace("</strong>", "</strong><span>₹5.00</span>");
+    if (mode === "unmarkedOriginal")
+      fee = fee.replace("<del>", "<span>").replace("</del>", "</span>");
+    if (mode === "annotationAmount")
+      fee = fee.replace("</small>", "<span>₹2.00</span></small>");
+    if (mode === "duplicateAnnotation")
+      fee = fee.replace(
+        "</small>",
+        '</small><small><span>Free for</span><svg width="12" height="12"></svg></small>',
+      );
+    if (mode === "missingIcon") fee = fee.replace(/<svg[\s\S]*?<\/svg>/, "");
+    if (mode === "mergedCharge")
+      fee = fee
+        .replace("</small>", "<span>Free</span></small>")
+        .replace('<strong id="effective-handling">Free</strong>', "");
+    if (mode === "unknownAnnotation")
+      fee = fee.replace("Free for", "Free for eligible members");
+    html = statusFeePresentation.replace(explanatoryFee, fee);
+    if (mode === "annotationOnTotal")
+      html = html.replace(
+        "<strong>You pay</strong>",
+        '<strong>You pay</strong><small>Free for<svg width="12" height="12"></svg></small>',
+      );
+    await expect(extract()).rejects.toThrow();
+  });
+
+  test("a charged handling fee with explanation remains a positive adjustment", async () => {
+    html = statusFeePresentation
+      .replace('id="effective-handling">Free', 'id="effective-handling">₹5.00')
+      .replace('id="effective-total">736.00', 'id="effective-total">741.00');
+    expect(
+      (await extract()).adjustments.map(
+        (adjustment) => adjustment.amount?.amount,
+      ),
+    ).toEqual([5]);
+  });
+
+  test("explained charged handling, delivery and discount keep their signs", async () => {
+    html = statusFeePresentation
+      .replace('id="effective-handling">Free', 'id="effective-handling">₹5.00')
+      .replace("<span>Free</span>", "<span>₹7.00</span>")
+      .replace(
+        '<div id="billed">',
+        '<div>Discount <span>-₹12.00</span></div><div id="billed">',
+      );
+    expect(
+      (await extract()).adjustments.map(
+        (adjustment) => adjustment.amount?.amount,
+      ),
+    ).toEqual([5, 7, -12]);
+  });
+
+  test("a decorative annotation icon may be accessibility-hidden without hiding the fee", async () => {
+    html = statusFeePresentation.replace(
+      "<svg width=",
+      '<svg aria-hidden="true" width=',
+    );
+    expect((await extract()).adjustments).toEqual([]);
+  });
+
+  test.each(["incompleteItem", "ambiguousFee", "missingFee"])(
+    "compatibility %s failure creates no JSON",
+    async (mode) => {
+      html = statusFeePresentation;
+      if (mode === "incompleteItem")
+        html = html.replace("500 g · <span>1 unit</span>", "500 g");
+      if (mode === "ambiguousFee")
+        html = html.replace(
+          'id="effective-handling">Free</strong>',
+          'id="effective-handling">Free</strong><span>₹5.00</span>',
+        );
+      if (mode === "missingFee")
+        html = html.replace(
+          '<strong id="effective-handling">Free</strong>',
+          "",
+        );
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(
+        join(tmpdir(), "now-compatibility-atomic-"),
+      );
+      const output = join(directory, "orders.json");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toThrow();
+        expect(await readdir(directory)).toEqual([]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|736|Fictional|Free for|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("second invented presentation exports all 23 effective merchandise rows", async () => {
     html = presentation;

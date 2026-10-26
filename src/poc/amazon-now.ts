@@ -473,7 +473,7 @@ async function readNowDom(
           scope && scope !== billRoot && depth < 5;
           depth++, scope = scope.parentElement
         ) {
-          if (/₹|\bINR\b|\bFree\b/i.test(text(scope))) break;
+          if (/₹|\bINR\b|\bFree\b(?!\s+for\b)/i.test(text(scope))) break;
         }
         if (
           !scope ||
@@ -493,6 +493,35 @@ async function readNowDom(
           .slice(name.length)
           .replace(/^\s*:\s*/, "")
           .trim();
+        const explanations = exact(row, /^Free for$/i);
+        if (explanations.length) {
+          // A separate annotation/icon group is not an effective fee value.
+          // Never strip amounts, or accept an annotation in place of a charge.
+          if (
+            !/^Handling (?:fee|charge)s?$/i.test(name) ||
+            explanations.length !== 1 ||
+            (value.match(/\bFree for\b/gi) ?? []).length !== 1
+          )
+            return abort();
+          let annotation: Element | null = explanations[0];
+          let bounded = false;
+          for (
+            let depth = 0;
+            annotation && annotation !== row && depth < 3;
+            depth++, annotation = annotation.parentElement
+          ) {
+            if (!/^Free for$/i.test(text(annotation))) break;
+            if (annotation.querySelectorAll("img, svg").length === 1) {
+              bounded = true;
+              break;
+            }
+          }
+          if (!bounded) return abort();
+          value = value
+            .replace(/\bFree for\b/i, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
         const subtitles = value.match(/\bInclusive of taxes\b/gi) ?? [];
         if (subtitles.length) {
           if (!/^You pay$/i.test(name) || subtitles.length !== 1)
@@ -556,6 +585,40 @@ async function readNowDom(
           return abort();
         return scope;
       });
+      // A heading/role is not required for an isolated delivery-time decoration.
+      // Only a complete delivery message plus one icon may form this region;
+      // item/list boundaries and any financial/product evidence disqualify it.
+      const deliveryMessage =
+        /^(?:Order\s+)?delivered\s+in\s+[1-9]\d*\s+(?:min(?:ute)?s?|h(?:ou)?rs?)(?:\s+(?:and\s+)?\d+\s+min(?:ute)?s?)?$/i;
+      const merchandiseBoundary = "article, li, [role=list], [role=listitem]";
+      for (const message of exact(root, deliveryMessage)) {
+        const itemAncestor = message.closest(merchandiseBoundary);
+        if (itemAncestor && root.contains(itemAncestor)) continue;
+        let scope: Element | null = message;
+        for (
+          let depth = 0;
+          scope && scope !== root && depth < 4;
+          depth++, scope = scope.parentElement
+        ) {
+          if (text(scope) !== text(message)) break;
+          const icons = Array.from(scope.querySelectorAll("img")).filter(
+            visible,
+          );
+          if (
+            icons.length !== 1 ||
+            scope.contains(billRoot) ||
+            scope.querySelector(merchandiseBoundary) ||
+            scope.querySelector(productLink) ||
+            Array.from(scope.querySelectorAll("*")).some(
+              (el) => el.textContent?.trim() && !current(el),
+            ) ||
+            /^[A-Z0-9]{10}$/.test(icons[0].getAttribute("alt") ?? "")
+          )
+            continue;
+          nonItemRoots.push(scope);
+          break;
+        }
+      }
       nonItemRoots.push(billRoot);
       const excluded = (el: Element): boolean =>
         nonItemRoots.some((scope) => scope.contains(el));
