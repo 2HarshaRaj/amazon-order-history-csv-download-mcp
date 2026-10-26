@@ -230,6 +230,30 @@ These additions contain only fixed codes, elapsed time and the selected order
 index, without adding IDs, amounts, product text, URLs or page content. They do
 not change extraction acceptance rules or capture partial snapshots as evidence.
 
+Merchandise ownership rejections use the following fixed subreasons. The generic
+`NOW_ITEM_OWNERSHIP_INVALID` remains allowlisted as a compatibility fallback;
+every current ownership abort site has a specific attribution.
+
+| Reason | Existing rejection |
+| --- | --- |
+| `NOW_NON_ITEM_REGION_INVALID` | A recognized decorative/status/payment region has an invalid boundary or contains merchandise/bill evidence. |
+| `NOW_ITEM_QUANTITY_MISSING` | No visible quantity candidates remain after exclusions. |
+| `NOW_ITEM_EVIDENCE_EXCESSIVE` | Quantity or image evidence exceeds the existing 100-candidate bound. |
+| `NOW_ITEM_QUANTITY_AMBIGUOUS` | A candidate row scope does not contain exactly one quantity. |
+| `NOW_ITEM_IMAGE_AMBIGUOUS` | A candidate row scope contains multiple merchandise images. |
+| `NOW_ITEM_BOUNDARY_INVALID` | The bounded row search reaches an invalid scope or conflicts with an excluded region. |
+| `NOW_ITEM_ROWS_OVERLAP` | Candidate merchandise rows contain or overlap each other. |
+| `NOW_ITEM_IMAGE_OWNER_INVALID` | An image does not have exactly one merchandise owner. |
+| `NOW_ITEM_LINK_OWNER_INVALID` | A product link does not have exactly one merchandise owner. |
+| `NOW_ITEM_PRICE_OWNER_INVALID` | Current price evidence does not have exactly one merchandise owner. |
+
+Attribution follows the existing validation order and stops at the first
+rejection. At the evidence-limit check, missing quantities take precedence over
+excessive evidence. At the final ownership check, images precede product links,
+which precede current prices, independently of their DOM order. These codes add
+no counts, text, selectors, DOM snapshots or financial facts. They identify the
+rejected condition without explaining its live cause or relaxing any rule.
+
 Reports contain available validated order IDs, dates/cancellation status, the
 zero-based selected order index, product names/ASINs, quantities, monetary facts
 in integer paise, adjustments, extraction/fallback sources, bounded technical

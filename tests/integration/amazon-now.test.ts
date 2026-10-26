@@ -7,6 +7,7 @@ import { chromium, Browser, BrowserContext, Page } from "playwright";
 import { extractNowOrder } from "../../src/poc/amazon-now";
 import {
   FailureDiagnostics,
+  NOW_OWNERSHIP_FAILURES,
   writeFailureReport,
 } from "../../src/poc/failure-diagnostics";
 import {
@@ -33,6 +34,150 @@ const original = readFileSync(
   join(__dirname, "fixtures/amazon-now-order.html"),
   "utf8",
 );
+const ownership = readFileSync(
+  join(__dirname, "fixtures/amazon-now-ownership.html"),
+  "utf8",
+);
+const ownershipImage = /<img[^>]+>/.exec(ownership)?.[0] ?? "";
+const ownershipRow =
+  /<article[^>]+>[\s\S]*?<\/article>/.exec(ownership)?.[0] ?? "";
+const ownershipLink = '<a href="/dp/B0FAKE0999">Invented unowned link</a>';
+const ownershipCases = [
+  [
+    "decorative region at root",
+    "NOW_NON_ITEM_REGION_INVALID",
+    ownership.replace("<!-- decoration -->", "<h2>Status</h2>"),
+  ],
+  [
+    "status region containing quantity",
+    "NOW_NON_ITEM_REGION_INVALID",
+    ownership.replace(
+      "<!-- decoration -->",
+      '<div role="status"><span>Qty: 1</span></div>',
+    ),
+  ],
+  [
+    "payment region containing product link",
+    "NOW_NON_ITEM_REGION_INVALID",
+    ownership.replace(
+      "<div>Invented funding, not a purchase charge</div>",
+      ownershipLink,
+    ),
+  ],
+  [
+    "payment region containing product image",
+    "NOW_NON_ITEM_REGION_INVALID",
+    ownership.replace(
+      "<div>Invented funding, not a purchase charge</div>",
+      ownershipImage.replace(
+        'alt="Invented ownership image"',
+        'alt="B0FAKE0999"',
+      ),
+    ),
+  ],
+  [
+    "status region containing bill",
+    "NOW_NON_ITEM_REGION_INVALID",
+    ownership
+      .replace("<!-- decoration -->", '<div role="status">')
+      .replace("</section>\n</section>", "</section></div>\n</section>"),
+  ],
+  [
+    "missing quantities",
+    "NOW_ITEM_QUANTITY_MISSING",
+    ownership.replace("Qty: 1", "Quantity unavailable"),
+  ],
+  [
+    "hidden quantity",
+    "NOW_ITEM_QUANTITY_MISSING",
+    ownership.replace("<div>Qty: 1</div>", "<div hidden>Qty: 1</div>"),
+  ],
+  [
+    "excessive quantities",
+    "NOW_ITEM_EVIDENCE_EXCESSIVE",
+    ownership.replace("<!-- decoration -->", "<span>Qty: 1</span>".repeat(100)),
+  ],
+  [
+    "excessive images",
+    "NOW_ITEM_EVIDENCE_EXCESSIVE",
+    ownership.replace("<!-- decoration -->", ownershipImage.repeat(100)),
+  ],
+  [
+    "ambiguous quantities",
+    "NOW_ITEM_QUANTITY_AMBIGUOUS",
+    ownership.replace(
+      "<div>Qty: 1</div>",
+      "<div>Qty: 1</div><div>Quantity: 1</div>",
+    ),
+  ],
+  [
+    "ambiguous images",
+    "NOW_ITEM_IMAGE_AMBIGUOUS",
+    ownership.replace(ownershipImage, ownershipImage.repeat(2)),
+  ],
+  [
+    "missing merchandise evidence at root boundary",
+    "NOW_ITEM_BOUNDARY_INVALID",
+    ownership.replace(
+      ownershipImage,
+      ownershipImage.replace("<img", '<img role="presentation"'),
+    ),
+  ],
+  [
+    "row encloses an excluded status region",
+    "NOW_ITEM_BOUNDARY_INVALID",
+    ownership.replace(
+      "</article>",
+      '<span role="status">Ready</span></article>',
+    ),
+  ],
+  [
+    "overlapping rows at bounded ancestor limit",
+    "NOW_ITEM_ROWS_OVERLAP",
+    ownership.replace(
+      /<!-- merchandise -->[\s\S]*?<!-- \/merchandise -->/,
+      `<div>${"<div>".repeat(6)}<span>Qty: 1</span>${"</div>".repeat(6)}${ownershipRow}</div>`,
+    ),
+  ],
+  [
+    "unowned image",
+    "NOW_ITEM_IMAGE_OWNER_INVALID",
+    ownership.replace("<!-- decoration -->", ownershipImage),
+  ],
+  [
+    "unowned product link",
+    "NOW_ITEM_LINK_OWNER_INVALID",
+    ownership.replace("<!-- decoration -->", ownershipLink),
+  ],
+  [
+    "unowned current price",
+    "NOW_ITEM_PRICE_OWNER_INVALID",
+    ownership.replace("<!-- decoration -->", "<div>₹1.00</div>"),
+  ],
+  [
+    "image before link and price despite DOM order",
+    "NOW_ITEM_IMAGE_OWNER_INVALID",
+    ownership.replace(
+      "<!-- decoration -->",
+      `<div>₹1.00</div>${ownershipLink}${ownershipImage}`,
+    ),
+  ],
+  [
+    "link before price despite DOM order",
+    "NOW_ITEM_LINK_OWNER_INVALID",
+    ownership.replace(
+      "<!-- decoration -->",
+      `<div>₹1.00</div>${ownershipLink}`,
+    ),
+  ],
+  [
+    "missing quantity before excessive images",
+    "NOW_ITEM_QUANTITY_MISSING",
+    ownership
+      .replace("Qty: 1", "Quantity unavailable")
+      .replace("<!-- decoration -->", ownershipImage.repeat(100)),
+  ],
+] as const;
 const presentation = readFileSync(
   join(__dirname, "fixtures/amazon-now-presentation.html"),
   "utf8",
@@ -100,6 +245,119 @@ browserTests("integrated Amazon Now extraction", () => {
   const extract = async (trace?: FailureDiagnostics) =>
     extractNowOrder(page, id, outer, async () => {}, trace);
 
+  test("ownership fixtures cover every allowlisted subreason", () => {
+    expect(ownershipImage).not.toBe("");
+    expect(ownershipRow).not.toBe("");
+    expect(new Set(ownershipCases.map(([, reason]) => reason))).toEqual(
+      new Set(NOW_OWNERSHIP_FAILURES),
+    );
+  });
+
+  test("invented ownership fixture remains fully extractable", async () => {
+    html = ownership;
+    const detail = await extract();
+    expect(detail).toMatchObject({
+      itemCount: 1,
+      orderTotal: { amount: 10 },
+      adjustments: [],
+    });
+    expect(detail.items[0]).toMatchObject({
+      productName: "Invented ownership item",
+      quantity: 1,
+      itemTotal: { amount: 10 },
+    });
+  });
+
+  test.each(ownershipCases)(
+    "ownership subreason: %s",
+    async (_name, reason, fixture) => {
+      html = fixture;
+      const trace = new FailureDiagnostics();
+      trace.select({ orderId: "not supplied", orderDate: "not supplied" }, 2);
+      trace.provenance("amazon-now-order-details");
+      const error = await extract(trace).catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        stage: "detail",
+        reason,
+        category: "validation",
+      });
+      const report = trace.report(error);
+      expect(report.events.slice(-3)).toMatchObject([
+        { reason: "NOW_BILL_SUMMARY", orderIndex: 2 },
+        { reason: "NOW_ITEMS_FEES", orderIndex: 2 },
+        { reason, orderIndex: 2, category: "validation" },
+      ]);
+      expect(report.counts).toMatchObject({ items: 0, adjustments: 0 });
+      expect(report.items).toEqual([]);
+      expect(report.adjustments).toEqual([]);
+      expect(report.orderTotalSource).toBeUndefined();
+      const directory = await mkdtemp(join(tmpdir(), "now-ownership-report-"));
+      try {
+        await writeFailureReport(report, directory);
+        const names = await readdir(directory);
+        expect(names).toHaveLength(1);
+        const saved = await readFile(join(directory, names[0]), "utf8");
+        expect(JSON.parse(saved).failure).toEqual({
+          stage: "detail",
+          reason,
+          category: "validation",
+        });
+        expect(saved + String(error)).not.toMatch(
+          /111-|Invented|B0FAKE|₹|10\.00|https?:|<html>|Quantity unavailable|Qty:/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("ownership failure preserves prior JSON and persists only its categorical additions", async () => {
+    html = ownership.replace("<!-- decoration -->", "<div>₹1.00</div>");
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(join(tmpdir(), "now-ownership-atomic-"));
+    const output = join(directory, "orders.json");
+    const reports = join(directory, "reports");
+    const logs: string[] = [];
+    await writeFile(output, "prior complete export");
+    try {
+      await expect(
+        runExport(
+          { ...options, output },
+          (message) => {
+            logs.push(message);
+          },
+          {
+            list: listOrders,
+            extract: extractOrderItems,
+            write: validateAndWriteExport,
+            report: (report) => writeFailureReport(report, reports),
+            cleanup: async () => {},
+          },
+        ),
+      ).rejects.toMatchObject({ reason: "NOW_ITEM_PRICE_OWNER_INVALID" });
+      expect(await readFile(output, "utf8")).toBe("prior complete export");
+      expect((await readdir(directory)).sort()).toEqual([
+        "orders.json",
+        "reports",
+      ]);
+      const names = await readdir(reports);
+      expect(names).toHaveLength(1);
+      const report = JSON.parse(
+        await readFile(join(reports, names[0]), "utf8"),
+      );
+      expect(report.events.at(-1)).toMatchObject({
+        reason: "NOW_ITEM_PRICE_OWNER_INVALID",
+        orderIndex: 0,
+      });
+      expect(report.counts).toMatchObject({ items: 0, adjustments: 0 });
+      expect(JSON.stringify(report.events) + logs.join(" ")).not.toMatch(
+        /111-|Invented|₹|https?:|B0FAKE|10\.00|230\.00/,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test.each(["tracking", "dialog"])(
     "exact %s identity rejection remains attributable without exposing IDs",
     async (mode) => {
@@ -160,7 +418,7 @@ browserTests("integrated Amazon Now extraction", () => {
     ["status", "NOW_ORDER_STATUS_UNSUPPORTED"],
     ["billSummary", "NOW_BILL_SUMMARY_INVALID"],
     ["billRow", "NOW_BILL_ROW_INVALID"],
-    ["ownership", "NOW_ITEM_OWNERSHIP_INVALID"],
+    ["ownership", "NOW_ITEM_IMAGE_OWNER_INVALID"],
     ["fields", "NOW_ITEM_FIELDS_INVALID"],
   ])(
     "categorical DOM failure %s persists without page content",
@@ -445,7 +703,7 @@ browserTests("integrated Amazon Now extraction", () => {
       )
       .replace('id="effective-total">736.00', 'id="effective-total">715.00');
     await expect(extract()).rejects.toMatchObject({
-      reason: "NOW_ITEM_OWNERSHIP_INVALID",
+      reason: "NOW_ITEM_IMAGE_OWNER_INVALID",
     });
   });
 

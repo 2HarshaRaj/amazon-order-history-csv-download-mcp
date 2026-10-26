@@ -621,7 +621,7 @@ async function readNowDom(
                 /^[A-Z0-9]{10}$/.test(image.getAttribute("alt") ?? ""),
             )
           )
-            return abort();
+            return abort("NOW_NON_ITEM_REGION_INVALID");
           return scope;
         });
         // A heading/role is not required for an isolated delivery-time decoration.
@@ -685,7 +685,11 @@ async function readNowDom(
           quantities.length > 100 ||
           images.length > 100
         )
-          abort();
+          abort(
+            !quantities.length
+              ? "NOW_ITEM_QUANTITY_MISSING"
+              : "NOW_ITEM_EVIDENCE_EXCESSIVE",
+          );
         const itemRoots = new Set<Element>();
         for (const quantity of quantities) {
           let scope: Element | null = quantity;
@@ -695,8 +699,9 @@ async function readNowDom(
             depth++, scope = scope.parentElement
           ) {
             if (quantities.filter((el) => scope?.contains(el)).length !== 1)
-              abort();
-            if (images.filter((el) => scope?.contains(el)).length > 1) abort();
+              abort("NOW_ITEM_QUANTITY_AMBIGUOUS");
+            if (images.filter((el) => scope?.contains(el)).length > 1)
+              abort("NOW_ITEM_IMAGE_AMBIGUOUS");
             if (
               /₹|\bINR\b/.test(text(scope)) &&
               (images.some((el) => scope?.contains(el)) ||
@@ -710,13 +715,13 @@ async function readNowDom(
             excluded(scope) ||
             nonItemRoots.some((other) => scope?.contains(other))
           )
-            return abort();
+            return abort("NOW_ITEM_BOUNDARY_INVALID");
           if (
             [...itemRoots].some(
               (other) => scope?.contains(other) || other.contains(scope),
             )
           )
-            return abort();
+            return abort("NOW_ITEM_ROWS_OVERLAP");
           itemRoots.add(scope);
         }
         const merchandiseEvidence = [...images, ...productLinks];
@@ -733,13 +738,20 @@ async function readNowDom(
               ),
           ),
         );
-        if (
-          merchandiseEvidence.some(
-            (el) =>
-              [...itemRoots].filter((row) => row.contains(el)).length !== 1,
-          )
-        )
-          abort();
+        // Preserve the existing evidence order and exact ownership predicate.
+        // Classify only the first rejection; no page-derived fact is reported.
+        const unowned = merchandiseEvidence.find(
+          (el) =>
+            [...itemRoots].filter((row) => row.contains(el)).length !== 1,
+        );
+        if (unowned)
+          abort(
+            images.includes(unowned)
+              ? "NOW_ITEM_IMAGE_OWNER_INVALID"
+              : productLinks.includes(unowned)
+                ? "NOW_ITEM_LINK_OWNER_INVALID"
+                : "NOW_ITEM_PRICE_OWNER_INVALID",
+          );
         const amount = /^(?:-\s*)?(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i;
         reason = "NOW_ITEM_FIELDS_INVALID";
         // Complete fields, or a currency node paired only with its adjacent numeric
