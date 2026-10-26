@@ -122,19 +122,30 @@ order card supplies its actual HTTPS Amazon.in UFF/tracking details link; the
 exporter does not construct a conventional details URL for it. A single bounded
 click on the unique visible **View order details** control must open a unique,
 visible **Order Details** dialog. Pre-existing sheets are rejected. Committed
-UFF/tracking URLs must retain the exact selected Order ID, and the dialog must
-independently display that full ID once. Missing, duplicate or conflicting
-ownership stops the export.
+UFF/tracking URLs must retain the exact selected Order ID. Before clicking, the
+control must share a bounded source region with one independently displayed,
+complete labeled tracking Order ID. The dialog must independently display the
+full ID once too. Only one optional display-only ASCII `#` is normalized; digits,
+hyphens and identity are never repaired. Missing, duplicate, hidden-only or
+conflicting ownership stops the export before dispatch or extraction.
 
 For Now, the independent billed total is the unique effective INR **Bill summary
 → You pay** declaration, with internal provenance `amazon-now-you-pay`. Computed
 line-through prices and hidden content are excluded. The adapter retains exact
-visible product names, explicitly labeled `Qty:`/`Quantity:` values and current
-prices, with an empty ASIN when no valid associated identifier is available.
+visible product names, explicit `Qty:`/`Quantity:` or `N unit(s)` quantities and
+current prices, with an empty ASIN when no valid associated identifier is
+available. A supported package descriptor such as `500 g · 1 unit` supplies only
+its explicit purchased-unit count; package size is never treated as quantity.
+Adjacent rupee and numeric DOM nodes are paired only within their own parent.
+Bill values come from individual label-bound rows, including `Inclusive of taxes`
+only as a subtitle of `You pay`; no flat sequence of unrelated tokens is paired.
 Quantity greater than one requires both labeled **Unit price** and **Item total**
 or **Line total** declarations; the exporter never divides a line amount to
-invent a unit price. Item images anchor bounded row discovery; layouts lacking
-these semantic relationships fail closed rather than returning partial items.
+invent a unit price. Quantity declarations bind bounded merchandise rows with
+product evidence. All remaining product links, images and current prices must
+belong to those rows. Separately named delivery/status/payment regions and
+explicitly presentational images do not become products; incomplete rows,
+overlap, duplicates and unrecognized image/price ownership fail closed.
 
 Explicit handling/delivery/shipping fee rows count only their effective charge;
 **Free** with a crossed-out fee contributes no adjustment. Discounts/promotions
@@ -147,7 +158,7 @@ contract are unchanged. Safe failures use existing identity/validation codes or
 `NOW_EXTRACTION_FAILED`. Owner-local reports allowlist the distinct total source.
 
 Now validation in this branch uses invented static and offline Chromium fixtures,
-including a complete 23-item order. It does not establish compatibility with every
+including two complete 23-item presentations. It does not establish compatibility with every
 live Now layout. Live six-order Windows validation, production synchronization,
 merge, deployment and scheduler re-enable each require separate owner approval.
 The existing Amazon Orders catch-up task must remain **Disabled**.

@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import {
   NowSnapshot,
+  normalizeNowDisplayedId,
   parseNowSnapshot,
   validateNowUrl,
 } from "../../../src/poc/amazon-now";
@@ -38,6 +39,66 @@ function fixture(): NowSnapshot {
 }
 
 describe("Amazon Now fact validation (no Chromium)", () => {
+  test.each([id, `#${id}`, `# ${id}`])(
+    "normalizes only the optional display hash",
+    (displayed) => {
+      expect(normalizeNowDisplayedId(displayed)).toBe(id);
+      const facts = fixture();
+      facts.orderIds = [displayed];
+      expect(parseNowSnapshot(facts, id).orderId).toBe(id);
+    },
+  );
+  test.each([
+    `##${id}`,
+    `#${id}0`,
+    `#${id.replace("111", "11")}`,
+    `＃${id}`,
+    `#${id} trailing`,
+    `#${id.replace("-", " ")}`,
+  ])("rejects malformed display identity without repairing it", (displayed) => {
+    expect(() => normalizeNowDisplayedId(displayed)).toThrow();
+  });
+  test.each([
+    "1 unit",
+    "1 units",
+    "500 g · 1 unit",
+    "1 kg • 1 unit",
+    "250 ml | 1 unit",
+    "500 g · 1 unit(s)",
+  ])("uses the explicit purchased count in %s", (part) => {
+    const facts = fixture();
+    facts.items[0].parts[1] = part;
+    expect(parseNowSnapshot(facts, id).items[0].quantity).toBe(1);
+  });
+  test.each([
+    "500 g",
+    "500 g · unit",
+    "500 g · 0 units",
+    "500 g · -1 unit",
+    "500 g · 1.5 units",
+    "500 g · 1 unit · 2 units",
+    "500 g · 1 unit Qty: 1",
+  ])("rejects missing/ambiguous quantity %s", (part) => {
+    const facts = fixture();
+    facts.items[0].parts[1] = part;
+    expect(() => parseNowSnapshot(facts, id)).toThrow();
+  });
+  test("two displayed units require unit and line evidence and never division", () => {
+    const facts = fixture();
+    facts.items[0].parts = [
+      "Invented item",
+      "500 g · 2 units",
+      "Unit price: ₹ 5.00",
+      "Line total: ₹ 10.00",
+    ];
+    expect(parseNowSnapshot(facts, id).items[0]).toMatchObject({
+      quantity: 2,
+      unitPrice: { amount: 5 },
+      itemTotal: { amount: 10 },
+    });
+    facts.items[0].parts = ["Invented item", "500 g · 2 units", "₹10.00"];
+    expect(() => parseNowSnapshot(facts, id)).toThrow();
+  });
   test("complete 23-item document with deterministic indexes and distinct provenance", () => {
     const detail = parseNowSnapshot(fixture(), id);
     expect(detail.orderTotalSource).toBe("amazon-now-you-pay");

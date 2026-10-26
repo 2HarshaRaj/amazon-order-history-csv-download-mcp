@@ -29,6 +29,10 @@ const original = readFileSync(
   join(__dirname, "fixtures/amazon-now-order.html"),
   "utf8",
 );
+const presentation = readFileSync(
+  join(__dirname, "fixtures/amazon-now-presentation.html"),
+  "utf8",
+);
 const list = `<div class="order-card"><div class="order-header">Order placed 1 October 2026<div>Total ₹230.00</div><span>${id}</span></div><a href="${outer}">View order details</a></div>`;
 const options = {
   startDate: "2026-10-01",
@@ -83,6 +87,375 @@ browserTests("integrated Amazon Now extraction", () => {
     jest.restoreAllMocks();
   });
   const extract = async () => extractNowOrder(page, id, outer, async () => {});
+
+  test("second invented presentation exports all 23 effective merchandise rows", async () => {
+    html = presentation;
+    listHtml = list.replace("₹230.00", "₹736.00");
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const [summary] = (await listOrders(options.startDate, options.endDate, 5))
+      .orders;
+    const detail = await extractOrderItems(id, undefined, summary);
+    expect(detail.items).toHaveLength(23);
+    expect(detail.items.map((item) => item.productName)).toEqual(
+      Array.from(
+        { length: 23 },
+        (_, index) =>
+          `Fictional market item ${String(index + 1).padStart(2, "0")}`,
+      ),
+    );
+    expect(detail.items.map((item) => item.quantity)).toEqual(
+      Array(23).fill(1),
+    );
+    expect(detail.items.map((item) => item.itemTotal?.amount)).toEqual(
+      Array.from({ length: 23 }, (_, index) => index + 21),
+    );
+    expect(
+      detail.items.every(
+        (item) => item.unitPrice?.amount === item.itemTotal?.amount,
+      ),
+    ).toBe(true);
+    expect(detail.items[0].asin).toBe("B0FAKE0001");
+    expect(detail.items[3].asin).toBe("");
+    expect(detail.orderTotal?.amount).toBe(736);
+    expect(detail.orderTotalSource).toBe("amazon-now-you-pay");
+    expect(detail.adjustments).toEqual([]);
+    const document = createExportDocument(
+      options,
+      1,
+      [{ summary, detail }],
+      new Date().toISOString(),
+    );
+    expect(document.orders[0].items.map((item) => item.lineIndex)).toEqual(
+      Array.from({ length: 23 }, (_, index) => index),
+    );
+    expect(JSON.stringify(document)).not.toMatch(
+      /Gift Cards|Voucher|Payment card|Inclusive of taxes|999/,
+    );
+    expect(await page.locator("button").getAttribute("data-clicked")).toBe(
+      "yes",
+    );
+  });
+
+  test.each([
+    "wrong",
+    "missing",
+    "duplicate",
+    "hidden",
+    "doubleHash",
+    "suffix",
+    "wrongOwner",
+  ])("tracking %s identity prevents the click", async (mode) => {
+    html = presentation;
+    if (mode === "wrong")
+      html = html.replace(
+        `<span>#${id}</span>`,
+        "<span>#111-2222222-4444444</span>",
+      );
+    if (mode === "missing")
+      html = html.replace("<b>Order ID</b>", "<b>Reference</b>");
+    if (mode === "duplicate")
+      html = html.replace(
+        "<h1>Order tracking</h1>",
+        `<h1>Order tracking</h1><div>Order ID #${id}</div>`,
+      );
+    if (mode === "hidden")
+      html = html.replace('id="tracking-id"', 'id="tracking-id" hidden');
+    if (mode === "doubleHash")
+      html = html.replace(`<span>#${id}</span>`, `<span>##${id}</span>`);
+    if (mode === "suffix")
+      html = html.replace(`<span>#${id}</span>`, `<span>#${id}0</span>`);
+    if (mode === "wrongOwner")
+      html = html.replace(
+        `data-order-id="${id}"`,
+        'data-order-id="111-2222222-4444444"',
+      );
+    await expect(extract()).rejects.toThrow();
+    expect(
+      await page.locator("button").getAttribute("data-clicked"),
+    ).toBeNull();
+  });
+
+  test.each([
+    "wrongSheet",
+    "duplicateSheetId",
+    "doubleHashSheet",
+    "missingQuantity",
+    "ambiguousQuantity",
+    "duplicateQuantity",
+    "quantityTwo",
+    "twoCurrentPrices",
+    "malformedPrice",
+    "unmarkedOldPrice",
+    "hiddenPrice",
+    "missingBilled",
+    "duplicateBilled",
+    "conflictingBilled",
+    "hiddenBilled",
+    "twoBilledValues",
+    "unknownSubtitle",
+    "includedFee",
+    "unknownCharge",
+    "unclassifiedImage",
+    "merchandiseInPayment",
+  ])("presentation rejects %s instead of guessing", async (mode) => {
+    html = presentation;
+    if (mode === "wrongSheet")
+      html = html.replace(
+        `<b>Order ID:</b><span>#${id}</span>`,
+        "<b>Order ID:</b><span>#111-2222222-4444444</span>",
+      );
+    if (mode === "duplicateSheetId")
+      html = html.replace(
+        "<h1>Order Details</h1>",
+        `<h1>Order Details</h1><div>Order ID #${id}</div>`,
+      );
+    if (mode === "doubleHashSheet")
+      html = html.replace(
+        `<b>Order ID:</b><span>#${id}</span>`,
+        `<b>Order ID:</b><span>##${id}</span>`,
+      );
+    if (mode === "missingQuantity")
+      html = html.replace("500 g · <span>1 unit</span>", "500 g");
+    if (mode === "ambiguousQuantity")
+      html = html.replace(
+        "<span>1 unit</span>",
+        "<span>1 unit · 2 units</span>",
+      );
+    if (mode === "duplicateQuantity")
+      html = html.replace(
+        "<span>1 unit</span>",
+        "<span>1 unit</span><span>Qty: 1</span>",
+      );
+    if (mode === "quantityTwo")
+      html = html.replace("<span>1 unit</span>", "<span>2 units</span>");
+    if (mode === "twoCurrentPrices")
+      html = html.replace(
+        'class="effective-number">21.00</span>',
+        'class="effective-number">21.00</span><span>₹22.00</span>',
+      );
+    if (mode === "malformedPrice")
+      html = html.replace(
+        'class="effective-number">21.00',
+        'class="effective-number">21.001',
+      );
+    if (mode === "unmarkedOldPrice")
+      html = html.replace(
+        "<del><span>₹</span><span>26.00</span></del>",
+        "<div><span>₹</span><span>26.00</span></div>",
+      );
+    if (mode === "hiddenPrice")
+      html = html.replace(
+        'class="effective-symbol"',
+        'class="effective-symbol" hidden',
+      );
+    if (mode === "missingBilled")
+      html = html.replace(
+        "<strong>You pay</strong>",
+        "<strong>Other total</strong>",
+      );
+    if (mode === "duplicateBilled" || mode === "conflictingBilled")
+      html = html.replace(
+        '<div id="billed">',
+        `<div>You pay ₹${mode === "duplicateBilled" ? "736" : "737"}.00</div><div id="billed">`,
+      );
+    if (mode === "hiddenBilled")
+      html = html.replace('id="billed"', 'id="billed" hidden');
+    if (mode === "twoBilledValues")
+      html = html.replace(
+        'id="effective-total">736.00</strong>',
+        'id="effective-total">736.00</strong><span>₹735.00</span>',
+      );
+    if (mode === "unknownSubtitle")
+      html = html.replace("Inclusive of taxes", "Tax calculation pending");
+    if (mode === "includedFee")
+      html = html.replace("Handling fee", "Handling fee included");
+    if (mode === "unknownCharge")
+      html = html.replace(
+        '<div id="handling">',
+        '<div>Service fee ₹3.00</div><div id="handling">',
+      );
+    if (mode === "unclassifiedImage")
+      html = html.replace(
+        '<div role="list"',
+        '<img alt="Unknown icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><div role="list"',
+      );
+    if (mode === "merchandiseInPayment")
+      html = html.replace(
+        "<h2>Payment</h2>",
+        '<h2>Payment</h2><a href="/dp/B0FAKE0001">Incomplete merchandise</a>',
+      );
+    await expect(extract()).rejects.toThrow();
+  });
+
+  test("hidden duplicate merchandise and totals do not become active facts", async () => {
+    html = presentation
+      .replace(
+        '<div role="list" id="merchandise">',
+        '<div role="list" id="merchandise"><article hidden><img alt="B0FAKE0001"><span>Qty: 9</span><span>₹99.00</span></article>',
+      )
+      .replace(
+        '<div id="billed">',
+        '<div hidden>You pay ₹999.00</div><div id="billed">',
+      );
+    expect((await extract()).items).toHaveLength(23);
+  });
+  test("two units with separate labeled unit/line prices remain independently priced", async () => {
+    html = presentation
+      .replace("<span>1 unit</span>", "<span>2 units</span>")
+      .replace(
+        '<span class="effective-symbol">₹</span><span class="effective-number">21.00</span>',
+        "<div>Unit price: <span>₹</span><span>10.50</span></div><div>Line total: <span>₹</span><span>21.00</span></div>",
+      );
+    expect((await extract()).items[0]).toMatchObject({
+      quantity: 2,
+      unitPrice: { amount: 10.5 },
+      itemTotal: { amount: 21 },
+    });
+  });
+  test.each(["Payment method", "Payment details", "Payment information"])(
+    "recognizes a separate %s region",
+    async (heading) => {
+      html = presentation.replace("<h2>Payment</h2>", `<h2>${heading}</h2>`);
+      expect((await extract()).items).toHaveLength(23);
+    },
+  );
+  test("an explicit accessibility status region independently owns its icon", async () => {
+    html = presentation
+      .replace(
+        '<section id="delivery-status">',
+        '<section role="status" id="delivery-status">',
+      )
+      .replace("<h2>Delivery status</h2>", "");
+    expect((await extract()).items).toHaveLength(23);
+  });
+
+  test.each([
+    "presentationalImage",
+    "missingImage",
+    "duplicateProduct",
+    "statusMerchandise",
+    "rowOverlap",
+  ])("merchandise ownership cannot omit %s", async (mode) => {
+    html = presentation;
+    if (mode === "presentationalImage")
+      html = html
+        .replace(
+          '<img alt="B0FAKE0001"',
+          '<img role="presentation" alt="B0FAKE0001"',
+        )
+        .replace("500 g · <span>1 unit</span>", "500 g");
+    if (mode === "missingImage")
+      html = html
+        .replace(/<img alt="B0FAKE0001"[^>]+>/, "")
+        .replace("500 g · <span>1 unit</span>", "500 g");
+    if (mode === "duplicateProduct")
+      html = html
+        .replace("B0FAKE0002", "B0FAKE0001")
+        .replace("Fictional market item 02", "Fictional market item 01");
+    if (mode === "statusMerchandise")
+      html = html.replace(
+        "<span>Delivered</span>",
+        "<span>Delivered</span><span>Qty: 1</span><span>₹21.00</span>",
+      );
+    if (mode === "rowOverlap")
+      html = html.replace(
+        '<article role="listitem" id="invented-row-2">',
+        '<article role="listitem" id="invented-row-2"><span>Qty: 1</span>',
+      );
+    await expect(extract()).rejects.toThrow();
+  });
+
+  test("presentation signed discounts and charged fees retain their effective values", async () => {
+    html = presentation
+      .replace("<strong>Free</strong>", "<strong>₹5.00</strong>")
+      .replace("<span>Free</span>", "<span>₹7.00</span>")
+      .replace(
+        '<div id="billed">',
+        '<div><span>Discount</span><span>-₹</span><span>12.00</span></div><div id="billed">',
+      );
+    expect(
+      (await extract()).adjustments.map(
+        (adjustment) => adjustment.amount?.amount,
+      ),
+    ).toEqual([5, 7, -12]);
+  });
+
+  test.each([1, 2])(
+    "presentation independently declared total has %s paise variance",
+    async (paise) => {
+      html = presentation.replace(
+        'id="effective-total">736.00',
+        `id="effective-total">736.0${paise}`,
+      );
+      if (paise === 1) expect((await extract()).orderTotal.amount).toBe(736.01);
+      else
+        await expect(extract()).rejects.toMatchObject({
+          reason: "TOTAL_MISMATCH",
+        });
+    },
+  );
+
+  test.each(["tracking", "quantity", "total", "price", "incompleteRow"])(
+    "presentation %s failure preserves prior JSON and creates no partial export",
+    async (mode) => {
+      html = presentation;
+      if (mode === "tracking")
+        html = html.replace(
+          `<span>#${id}</span>`,
+          "<span>#111-2222222-4444444</span>",
+        );
+      if (mode === "quantity")
+        html = html.replace(
+          "500 g · <span>1 unit</span>",
+          "500 g · <span>1 unit · 2 units</span>",
+        );
+      if (mode === "incompleteRow")
+        html = html.replace("500 g · <span>1 unit</span>", "500 g");
+      if (mode === "total")
+        html = html.replace(
+          'id="effective-total">736.00',
+          'id="effective-total">736.02',
+        );
+      if (mode === "price")
+        html = html.replace(
+          'class="effective-number">21.00',
+          'class="effective-number">21.001',
+        );
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(
+        join(tmpdir(), "now-presentation-atomic-"),
+      );
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|736|Fictional|Voucher|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("production list → selected outer UFF link → tracking → sheet → unchanged JSON", async () => {
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);

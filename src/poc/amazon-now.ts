@@ -137,6 +137,27 @@ function money(text: string): {
   return { amount: parsed.amount, currency: "INR", formatted: text };
 }
 
+/** Normalize only a display prefix; never repair any part of an identifier. */
+export function normalizeNowDisplayedId(value: string): string {
+  const normalized = value.startsWith("#")
+    ? value.slice(1).replace(/^\s+/, "")
+    : value;
+  if (!ID.test(normalized)) fail();
+  return normalized;
+}
+
+function explicitQuantity(value: string): number {
+  const labeled = /^(?:qty|quantity)\s*:\s*([1-9]\d*)$/i.exec(value);
+  const units =
+    /^(?:\d+(?:\.\d+)?\s*(?:mg|g|kg|ml|l|litres?|liters?)\s*[·•|]\s*)?([1-9]\d*)\s+unit(?:s|\(s\))?$/i.exec(
+      value,
+    );
+  const quantity = Number((labeled ?? units)?.[1]);
+  if (!Number.isSafeInteger(quantity) || quantity < 1)
+    fail("ITEM_FACTS_INVALID");
+  return quantity;
+}
+
 /** Pure parser of bounded visible facts. Funding never enters this snapshot. */
 export function parseNowSnapshot(
   input: unknown,
@@ -145,7 +166,11 @@ export function parseNowSnapshot(
   const result = snapshotSchema.safeParse(input);
   if (!result.success) fail("ITEM_SHAPE_AMBIGUOUS");
   const facts = result.data;
-  if (!ID.test(orderId) || facts.orderIds[0] !== orderId) fail();
+  if (
+    !ID.test(orderId) ||
+    normalizeNowDisplayedId(facts.orderIds[0]) !== orderId
+  )
+    fail();
   let orderTotal: ReturnType<typeof money> | undefined;
   const adjustments: OrderAdjustment[] = [];
   const labels = new Set<string>();
@@ -197,15 +222,10 @@ export function parseNowSnapshot(
   const seen = new Set<string>();
   const items = facts.items.map(({ parts, alts, hrefs }) => {
     const quantities = parts.filter((part) =>
-      /^(?:qty|quantity)\s*:/i.test(part),
+      /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i.test(part),
     );
-    if (
-      quantities.length !== 1 ||
-      !/^(?:qty|quantity)\s*:\s*[1-9]\d*$/i.test(quantities[0])
-    )
-      fail("ITEM_FACTS_INVALID");
-    const quantity = Number(quantities[0].split(":")[1].trim());
-    if (!Number.isSafeInteger(quantity)) fail("ITEM_FACTS_INVALID");
+    if (quantities.length !== 1) fail("ITEM_FACTS_INVALID");
+    const quantity = explicitQuantity(quantities[0]);
     const prices = parts.filter((part) => /₹|\bINR\b/i.test(part));
     const names = parts.filter(
       (part) => !quantities.includes(part) && !prices.includes(part),
@@ -279,24 +299,24 @@ export function parseNowSnapshot(
   };
 }
 
-/** Read semantic relationships, not guessed Amazon CSS classes. All walks, node
- * counts and strings are bounded. Crossed-out prices are removed by computed
- * style (including inherited decorations), not by their position or value.
+/** One bounded reader for independent tracking identity and the active sheet.
+ * No Amazon CSS classes or positional price/quantity assumptions are used.
  */
-async function readDialog(
-  dialog: Locator,
+async function readNowDom(
+  anchor: Locator,
   orderId: string,
+  mode: "tracking" | "dialog",
 ): Promise<NowSnapshot> {
-  return dialog.evaluate(
-    (root, expected) => {
+  return anchor.evaluate(
+    (anchor, { expected, mode }) => {
       const abort = (): never => {
-        throw new Error("Unsupported Amazon Now dialog.");
+        throw new Error("Unsupported Amazon Now presentation.");
       };
-      const elements = [root, ...Array.from(root.querySelectorAll("*"))];
-      if (elements.length > 5000) abort();
+      let root: Element = anchor;
       const view = root.ownerDocument.defaultView;
       if (!view) return abort();
       const visible = (el: Element): boolean => {
+        if (mode === "tracking" && el.closest('[role="dialog"]')) return false;
         for (let node: Element | null = el; node; node = node.parentElement) {
           const style = view.getComputedStyle(node);
           if (
@@ -312,11 +332,7 @@ async function readDialog(
         return el.getClientRects().length > 0;
       };
       const current = (el: Element): boolean => {
-        for (
-          let node: Element | null = el;
-          node && root.contains(node);
-          node = node.parentElement
-        ) {
+        for (let node: Element | null = el; node; node = node.parentElement) {
           if (
             ["S", "DEL", "STRIKE"].includes(node.tagName) ||
             view
@@ -327,9 +343,9 @@ async function readDialog(
         }
         return visible(el);
       };
-      const textCache = new Map<Element, string>();
+      const cache = new Map<Element, string>();
       const text = (el: Element): string => {
-        const cached = textCache.get(el);
+        const cached = cache.get(el);
         if (cached !== undefined) return cached;
         if (!current(el)) return "";
         const value = Array.from(el.childNodes)
@@ -344,11 +360,16 @@ async function readDialog(
           .replace(/\s+/g, " ")
           .trim();
         if (value.length > 50000) return abort();
-        textCache.set(el, value);
+        cache.set(el, value);
         return value;
       };
+      const elements = (scope: Element): Element[] => {
+        const nodes = [scope, ...Array.from(scope.querySelectorAll("*"))];
+        if (nodes.length > 5000) abort();
+        return nodes;
+      };
       const leaves = (scope: Element): Element[] =>
-        [scope, ...Array.from(scope.querySelectorAll("*"))].filter((el) => {
+        elements(scope).filter((el) => {
           const value = text(el);
           return (
             value &&
@@ -357,16 +378,27 @@ async function readDialog(
         });
       const exact = (scope: Element, pattern: RegExp): Element[] =>
         leaves(scope).filter((el) => pattern.test(text(el)));
-      if (exact(root, /^Order Details$/i).length !== 1) abort();
-      const ancestorOwner = root.closest("[data-order-id]");
+      if (mode === "tracking") {
+        // The chosen control and the labeled tracking identity must share a small
+        // source region. A URL or a hidden sheet never supplies that identity.
+        let found = false;
+        for (let depth = 0; depth < 8; depth++) {
+          if (["BODY", "HTML"].includes(root.tagName)) abort();
+          if (exact(root, /^Order ID\b/i).length) {
+            found = true;
+            break;
+          }
+          const parent = root.parentElement;
+          if (!parent) return abort();
+          root = parent;
+        }
+        if (!found) abort();
+      } else if (exact(root, /^Order Details$/i).length !== 1) abort();
+      const nodes = elements(root);
+      const owner = root.closest("[data-order-id]");
+      if (owner && owner.getAttribute("data-order-id") !== expected) abort();
       if (
-        ancestorOwner &&
-        ancestorOwner.getAttribute("data-order-id") !== expected
-      )
-        abort();
-      // Reject stale explicit ownership anywhere inside the active sheet.
-      if (
-        elements.some(
+        nodes.some(
           (el) =>
             visible(el) &&
             el.hasAttribute("data-order-id") &&
@@ -374,6 +406,29 @@ async function readDialog(
         )
       )
         abort();
+      const identityRows = new Set<Element>();
+      const wholeId = /^Order ID(?:\s*:\s*|\s+)(#?\s*\S+)$/i;
+      for (const label of exact(root, /^Order ID\s*:?$/i)) {
+        let scope: Element | null = label;
+        for (
+          let depth = 0;
+          scope && depth < 5;
+          depth++, scope = scope.parentElement
+        ) {
+          if (!root.contains(scope)) break;
+          if (wholeId.test(text(scope))) {
+            identityRows.add(scope);
+            break;
+          }
+        }
+        if (!scope || !identityRows.has(scope)) abort();
+      }
+      for (const el of exact(root, wholeId)) identityRows.add(el);
+      const orderIds = [...identityRows].map(
+        (el) => wholeId.exec(text(el))?.[1] ?? "",
+      );
+      if (orderIds.length !== 1) abort();
+      if (mode === "tracking") return { orderIds, billRows: [], items: [] };
       if (
         exact(
           root,
@@ -381,29 +436,7 @@ async function readDialog(
         ).length
       )
         abort();
-      const ids = exact(root, /^Order ID\s*:?$/i);
-      const identityRows = new Set<Element>();
-      for (const label of ids) {
-        let scope: Element | null = label;
-        for (
-          let depth = 0;
-          scope && scope !== root && depth < 5;
-          depth++, scope = scope.parentElement
-        ) {
-          const match = /^Order ID(?:\s*:\s*|\s+)(\S+)$/i.exec(text(scope));
-          if (match) {
-            identityRows.add(scope);
-            break;
-          }
-        }
-        if (!scope || !identityRows.has(scope)) abort();
-      }
-      // Also accept a single complete label/value element, never a substring ID.
-      for (const el of exact(root, /^Order ID(?:\s*:\s*|\s+)\S+$/i))
-        identityRows.add(el);
-      const orderIds = [...identityRows].map((el) =>
-        text(el).replace(/^Order ID(?:\s*:\s*|\s+)/i, ""),
-      );
+
       const headings = exact(root, /^Bill summary$/i);
       if (headings.length !== 1) abort();
       let bill: Element | null = headings[0].parentElement;
@@ -417,123 +450,256 @@ async function readDialog(
       if (
         !bill ||
         bill === root ||
-        bill.querySelector("img") ||
-        /payment method|paid (?:using|with)/i.test(text(bill))
+        /\bPayment(?: method| details| information)?\b/i.test(text(bill))
       )
         return abort();
       const billRoot = bill;
-      // Payment logos are not merchandise. Exclude only a separately bounded,
-      // explicitly named funding region; never drop arbitrary unpriced images.
-      const fundingRoots = exact(
+      const billLabel =
+        /^(You pay|Items? total|Items? subtotal|Subtotal|Handling (?:fee|charge)s?|Delivery (?:fee|charge)s?|Shipping (?:fee|charge)s?|Discount|Promotion(?: applied)?)(?=\s|:|$)/i;
+      const labelCandidates = leaves(billRoot).filter((el) =>
+        billLabel.test(text(el)),
+      );
+      const labels = labelCandidates.filter(
+        (el) =>
+          !labelCandidates.some((child) => child !== el && el.contains(child)),
+      );
+      const billRegions = new Set<Element>();
+      const billRows = labels.map((label) => {
+        const name = billLabel.exec(text(label))?.[1];
+        if (!name) return abort();
+        let scope: Element | null = label;
+        for (
+          let depth = 0;
+          scope && scope !== billRoot && depth < 5;
+          depth++, scope = scope.parentElement
+        ) {
+          if (/₹|\bINR\b|\bFree\b/i.test(text(scope))) break;
+        }
+        if (
+          !scope ||
+          scope === billRoot ||
+          labels.filter((el) => scope?.contains(el)).length !== 1
+        )
+          return abort();
+        const row = scope;
+        if (
+          [...billRegions].some(
+            (other) => row.contains(other) || other.contains(row),
+          )
+        )
+          return abort();
+        billRegions.add(row);
+        let value = text(row)
+          .slice(name.length)
+          .replace(/^\s*:\s*/, "")
+          .trim();
+        const subtitles = value.match(/\bInclusive of taxes\b/gi) ?? [];
+        if (subtitles.length) {
+          if (!/^You pay$/i.test(name) || subtitles.length !== 1)
+            return abort();
+          value = value
+            .replace(/\bInclusive of taxes\b/i, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+        return `${name} ${value}`;
+      });
+      // Every current bill fact must belong to one recognized row or its heading.
+      // Unknown charges, standalone values and tender rows cannot disappear.
+      const uncovered = (el: Element): string => {
+        if (!current(el) || billRegions.has(el) || el === headings[0])
+          return "";
+        return Array.from(el.childNodes)
+          .map((node) =>
+            node.nodeType === 3
+              ? (node.textContent ?? "")
+              : node.nodeType === 1
+                ? uncovered(node as Element)
+                : "",
+          )
+          .join(" ")
+          .trim();
+      };
+      if (uncovered(billRoot)) abort();
+
+      const quantitySignal = /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i;
+      const quantityField =
+        /^(?:(?:qty|quantity)\s*:\s*\d+|(?:\d+(?:\.\d+)?\s*(?:mg|g|kg|ml|l|litres?|liters?)\s*[·•|]\s*)?\d+\s+unit(?:s|\(s\))?)$/i;
+      const productLink = 'a[href*="/dp/"], a[href*="/gp/product/"]';
+      const nonItemHeadings = exact(
         root,
-        /^Payment (?:method|details|information)$/i,
-      ).map((heading) => {
-        const semantic = heading.closest('section, [role="group"]');
+        /^(?:Payment(?: (?:method|details|information))?|Delivery status|Order status|Status)$/i,
+      );
+      const nonItemRoots = [
+        ...nonItemHeadings,
+        ...nodes.filter(
+          (el) => el.getAttribute("role") === "status" && visible(el),
+        ),
+      ].map((heading) => {
+        const semantic = heading.closest(
+          'section, [role="group"], [role="status"]',
+        );
         const scope =
           semantic && semantic !== root ? semantic : heading.parentElement;
         if (
           !scope ||
           scope === root ||
           scope.contains(billRoot) ||
-          /\b(?:qty|quantity)\s*:/i.test(text(scope))
+          exact(scope, quantitySignal).length ||
+          Array.from(scope.querySelectorAll(productLink)).some(visible) ||
+          Array.from(scope.querySelectorAll("img")).some(
+            (image) =>
+              visible(image) &&
+              /^[A-Z0-9]{10}$/.test(image.getAttribute("alt") ?? ""),
+          )
         )
           return abort();
         return scope;
       });
-      // Retain complete quantity/price fields and exact title text while allowing
-      // arbitrary presentation wrappers. Unknown text is retained for rejection.
-      const fields = (el: Element): string[] => {
-        const value = text(el);
-        if (!value) return [];
-        if (
-          /^(?:-\s*)?(?:₹|INR\b)/i.test(value) ||
-          /^(?:qty|quantity)\s*:\s*\d+$/i.test(value) ||
-          /^(?:unit price|item total|line total)\s*:\s*(?:₹|INR\s*)\s*[\d,.]+$/i.test(
-            value,
-          ) ||
-          !/₹|\bINR\b|\b(?:qty|quantity)\s*:/i.test(value)
-        )
-          return [value];
-        return Array.from(el.childNodes).flatMap((node) =>
-          node.nodeType === 3
-            ? node.textContent?.trim()
-              ? [node.textContent.trim()]
-              : []
-            : node.nodeType === 1
-              ? fields(node as Element)
-              : [],
-        );
-      };
-      const billParts = fields(billRoot).filter(
-        (part) => !/^Bill summary$/i.test(part),
-      );
-      const billRows: string[] = [];
-      for (let index = 0; index < billParts.length; index++) {
-        const part = billParts[index];
-        if (/₹|\bINR\b|\bFree\b/i.test(part)) billRows.push(part);
-        else {
-          const value = billParts[++index];
-          if (!value) return abort();
-          billRows.push(`${part} ${value}`);
-        }
-      }
-      const images = elements.filter(
+      nonItemRoots.push(billRoot);
+      const excluded = (el: Element): boolean =>
+        nonItemRoots.some((scope) => scope.contains(el));
+      const images = nodes.filter(
         (el) =>
           el.tagName === "IMG" &&
           visible(el) &&
-          !fundingRoots.some((scope) => scope.contains(el)),
+          !excluded(el) &&
+          el.getAttribute("role") !== "presentation",
       );
-      if (!images.length || images.length > 100) abort();
+      const productLinks = nodes.filter(
+        (el) => el.matches(productLink) && visible(el) && !excluded(el),
+      );
+      const quantityCandidates = exact(root, quantitySignal).filter(
+        (el) => !excluded(el),
+      );
+      const quantities = quantityCandidates.filter(
+        (el) =>
+          !quantityCandidates.some(
+            (child) => child !== el && el.contains(child),
+          ),
+      );
+      if (!quantities.length || quantities.length > 100 || images.length > 100)
+        abort();
       const itemRoots = new Set<Element>();
-      for (const image of images) {
-        let scope = image.parentElement;
+      for (const quantity of quantities) {
+        let scope: Element | null = quantity;
         for (
           let depth = 0;
           scope && scope !== root && depth < 7;
           depth++, scope = scope.parentElement
         ) {
-          if (images.filter((el) => scope?.contains(el)).length !== 1) abort();
+          if (quantities.filter((el) => scope?.contains(el)).length !== 1)
+            abort();
+          if (images.filter((el) => scope?.contains(el)).length > 1) abort();
           if (
             /₹|\bINR\b/.test(text(scope)) &&
-            /\b(?:qty|quantity)\s*:/i.test(text(scope))
+            (images.some((el) => scope?.contains(el)) ||
+              productLinks.some((el) => scope?.contains(el)))
           )
             break;
         }
         if (
           !scope ||
           scope === root ||
-          billRoot.contains(scope) ||
-          scope.contains(billRoot)
+          excluded(scope) ||
+          nonItemRoots.some((other) => scope?.contains(other))
+        )
+          return abort();
+        if (
+          [...itemRoots].some(
+            (other) => scope?.contains(other) || other.contains(scope),
+          )
         )
           return abort();
         itemRoots.add(scope);
       }
-      // Unassociated quantity declarations indicate an unsupported or missing row.
+      const merchandiseEvidence = [...images, ...productLinks];
+      const priceCandidates = exact(root, /₹|\bINR\b/i).filter(
+        (el) => !excluded(el),
+      );
+      // An incomplete row must not disappear just because its image is marked
+      // presentational or missing. Every remaining current price needs an owner.
+      merchandiseEvidence.push(
+        ...priceCandidates.filter(
+          (el) =>
+            !priceCandidates.some(
+              (child) => child !== el && el.contains(child),
+            ),
+        ),
+      );
       if (
-        exact(root, /^(?:qty|quantity)\s*:/i).some(
-          (el) => ![...itemRoots].some((row) => row.contains(el)),
+        merchandiseEvidence.some(
+          (el) => [...itemRoots].filter((row) => row.contains(el)).length !== 1,
         )
       )
         abort();
-      const items = [...itemRoots].map((row) => {
-        const parts = fields(row);
-        return {
-          parts,
-          alts: images
-            .filter((el) => row.contains(el))
-            .map((el) => el.getAttribute("alt") ?? ""),
-          hrefs: Array.from(row.querySelectorAll("a[href]"))
-            .filter(visible)
-            .map(
-              (el) =>
-                new URL(el.getAttribute("href") ?? "", root.ownerDocument.URL)
-                  .href,
-            ),
-        };
-      });
+      const amount = /^(?:-\s*)?(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i;
+      // Complete fields, or a currency node paired only with its adjacent numeric
+      // sibling in the same parent. No cross-row flattening/pairing is allowed.
+      const fields = (el: Element): string[] => {
+        const value = text(el);
+        if (!value) return [];
+        if (
+          amount.test(value) ||
+          quantityField.test(value) ||
+          /^(?:unit price|item total|line total)\s*:\s*(?:₹|INR\s*)\s*[\d,.]+$/i.test(
+            value,
+          ) ||
+          !/₹|\bINR\b|\b(?:qty|quantity)\s*:|\b\d+\s+units?\b/i.test(value)
+        )
+          return [value];
+        const children = Array.from(el.childNodes);
+        const parts: string[] = [];
+        for (let index = 0; index < children.length; index++) {
+          const node = children[index];
+          const part =
+            node.nodeType === 3
+              ? (node.textContent ?? "").trim()
+              : node.nodeType === 1
+                ? text(node as Element)
+                : "";
+          if (!part) continue;
+          if (/^(?:-\s*)?(?:₹|INR)$/i.test(part)) {
+            // Whitespace-only text nodes may separate adjacent rendered elements.
+            let next = index + 1;
+            while (
+              next < children.length &&
+              children[next].nodeType === 3 &&
+              !children[next].textContent?.trim()
+            )
+              next++;
+            const sibling = children[next];
+            const number =
+              sibling?.nodeType === 3
+                ? (sibling.textContent?.trim() ?? "")
+                : sibling?.nodeType === 1
+                  ? text(sibling as Element)
+                  : "";
+            if (!/^[\d,]+(?:\.\d{1,2})?$/.test(number)) return abort();
+            parts.push(`${part}${number}`);
+            index = next;
+          } else if (node.nodeType === 1)
+            parts.push(...fields(node as Element));
+          else parts.push(part);
+        }
+        return parts;
+      };
+      const items = [...itemRoots].map((row) => ({
+        parts: fields(row),
+        alts: images
+          .filter((el) => row.contains(el))
+          .map((el) => el.getAttribute("alt") ?? ""),
+        hrefs: Array.from(row.querySelectorAll("a[href]"))
+          .filter(visible)
+          .map(
+            (el) =>
+              new URL(el.getAttribute("href") ?? "", root.ownerDocument.URL)
+                .href,
+          ),
+      }));
       return { orderIds, billRows, items };
     },
-    orderId,
+    { expected: orderId, mode },
     { timeout: TIMEOUT },
   );
 }
@@ -590,10 +756,23 @@ export async function extractNowOrder(
       .filter({ visible: true });
     await controls.first().waitFor({ state: "visible", timeout: TIMEOUT });
     if ((await controls.count()) !== 1) fail();
+    const trackingFacts = await readNowDom(controls, orderId, "tracking");
+    if (
+      trackingFacts.orderIds.length !== 1 ||
+      normalizeNowDisplayedId(trackingFacts.orderIds[0]) !== orderId
+    )
+      fail();
+    validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
+    if (
+      invalidNavigation ||
+      (await controls.count()) !== 1 ||
+      (await dialogs.count())
+    )
+      fail();
     await controls.click({ timeout: TIMEOUT });
     await dialogs.first().waitFor({ state: "visible", timeout: TIMEOUT });
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
-    const facts = await readDialog(dialogs.first(), orderId);
+    const facts = await readNowDom(dialogs.first(), orderId, "dialog");
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
     return parseNowSnapshot(facts, orderId);
