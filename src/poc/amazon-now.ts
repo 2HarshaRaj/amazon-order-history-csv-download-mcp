@@ -1034,9 +1034,29 @@ async function readNowDom(
             abort("NOW_ITEM_PRICE_OWNER_INVALID");
         const amount = /^(?:-\s*)?(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i;
         reason = "NOW_ITEM_FIELDS_INVALID";
+        const packageSize =
+          /^(?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*(?:mg|g|kg|ml|l|litres?|liters?)$/i;
+        const purchasedUnits =
+          /^(?:(?:qty|quantity)\s*:\s*[1-9]\d*|[1-9]\d*\s+unit(?:s|\(s\))?)$/i;
+        const fieldText = (node: Node | undefined): string =>
+          node?.nodeType === 3
+            ? (node.textContent?.trim() ?? "")
+            : node?.nodeType === 1
+              ? itemText(node as Element)
+              : "";
+        const boundedPackageField = (node: Node): boolean =>
+          node.nodeType === 3 ||
+          (node.nodeType === 1 &&
+            elements(node as Element).every(
+              (el) =>
+                current(el) &&
+                !el.matches(
+                  `${merchandiseBoundary}, img, a, button, [role=button], input, select, textarea`,
+                ),
+            ));
         // Complete fields, or a currency node paired only with its adjacent numeric
         // sibling in the same parent. No cross-row flattening/pairing is allowed.
-        const fields = (el: Element): string[] => {
+        const fields = (el: Element, split: Node[]): string[] => {
           const value = itemText(el);
           if (!value) return [];
           if (
@@ -1060,6 +1080,35 @@ async function readNowDom(
                   ? itemText(node as Element)
                   : "";
             if (!part) continue;
+            if (packageSize.test(part)) {
+              const nextField = (start: number): number => {
+                while (
+                  start < children.length &&
+                  children[start].nodeType === 3 &&
+                  !children[start].textContent?.trim()
+                )
+                  start++;
+                return start;
+              };
+              const separator = nextField(index + 1);
+              const declaration = nextField(separator + 1);
+              const units = fieldText(children[declaration]);
+              if (
+                fieldText(children[separator]) === "." &&
+                purchasedUnits.test(units) &&
+                [node, children[separator], children[declaration]].every(
+                  boundedPackageField,
+                )
+              ) {
+                if (split.length) return abort();
+                split.push(node, children[separator], children[declaration]);
+                // Discard only this proven adjacent package/period pair. Keep
+                // the purchased declaration unchanged for the strict parser.
+                parts.push(units);
+                index = declaration;
+                continue;
+              }
+            }
             if (/^(?:-\s*)?(?:₹|INR)$/i.test(part)) {
               // Whitespace-only text nodes may separate adjacent rendered elements.
               let next = index + 1;
@@ -1080,24 +1129,54 @@ async function readNowDom(
               parts.push(`${part}${number}`);
               index = next;
             } else if (node.nodeType === 1)
-              parts.push(...fields(node as Element));
+              parts.push(...fields(node as Element, split));
             else parts.push(part);
           }
           return parts;
         };
-        const items = [...itemRoots].map((row) => ({
-          parts: fields(row),
-          alts: images
-            .filter((el) => row.contains(el))
-            .map((el) => el.getAttribute("alt") ?? ""),
-          hrefs: Array.from(row.querySelectorAll("a[href]"))
-            .filter(visible)
-            .map(
-              (el) =>
-                new URL(el.getAttribute("href") ?? "", root.ownerDocument.URL)
-                  .href,
-            ),
-        }));
+        const items = [...itemRoots].map((row) => {
+          const split: Node[] = [];
+          const parts = fields(row, split);
+          // Both metadata nodes can be hidden/struck through, leaving a bare
+          // purchased declaration. They must not bypass the split-row guard.
+          if (
+            (split.length || parts.some((part) => purchasedUnits.test(part))) &&
+            elements(row).some((el) => {
+              const raw = el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+              return (
+                (/^[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*[a-z]+$/i.test(raw) ||
+                  (split.length &&
+                    (quantitySignal.test(raw) || /^[.·•|:;/]+$/.test(raw)))) &&
+                !current(el)
+              );
+            })
+          )
+            return abort();
+          if (split.length) {
+            if (
+              ![3, 4].includes(parts.length) ||
+              packageSize.test(parts[0]) ||
+              parts[0] === "." ||
+              /₹|\bINR\b/i.test(parts[0]) ||
+              !purchasedUnits.test(parts[1]) ||
+              !parts.slice(2).every((part) => /₹|\bINR\b/i.test(part))
+            )
+              return abort();
+          }
+          return {
+            parts,
+            alts: images
+              .filter((el) => row.contains(el))
+              .map((el) => el.getAttribute("alt") ?? ""),
+            hrefs: Array.from(row.querySelectorAll("a[href]"))
+              .filter(visible)
+              .map(
+                (el) =>
+                  new URL(el.getAttribute("href") ?? "", root.ownerDocument.URL)
+                    .href,
+              ),
+          };
+        });
         return { orderIds, billRows, items };
       };
       try {

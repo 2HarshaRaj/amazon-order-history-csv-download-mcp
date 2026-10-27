@@ -39,6 +39,34 @@ function fixture(): NowSnapshot {
 }
 
 describe("Amazon Now fact validation (no Chromium)", () => {
+  test.each([
+    ["400 g", ".", "1 unit"],
+    ["1 kg", ".", "1 unit"],
+    ["0 g", ".", "1 unit"],
+    ["-400 g", ".", "1 unit"],
+    ["400 oz", ".", "1 unit"],
+    ["400 g", "·", "1 unit"],
+    ["400 g", ".", ".", "1 unit"],
+    [".", "400 g", "1 unit"],
+    ["400 g", "."],
+    ["400 g . 1 unit"],
+  ])(
+    "flat facts never supply DOM proof for package metadata: %j",
+    (...fields) => {
+      const facts = fixture();
+      facts.items[0].parts = ["Invented name", ...fields, "₹10.00"];
+      expect(() => parseNowSnapshot(facts, id)).toThrow();
+    },
+  );
+  test.each(["Invented. name . 400 g", ".", "400 g"])(
+    "preserves the exact sole product-name field: %s",
+    (name) => {
+      const facts = fixture();
+      facts.items[0].parts[0] = name;
+      expect(parseNowSnapshot(facts, id).items[0].productName).toBe(name);
+    },
+  );
+
   test.each([id, `#${id}`, `# ${id}`])(
     "normalizes only the optional display hash",
     (displayed) => {

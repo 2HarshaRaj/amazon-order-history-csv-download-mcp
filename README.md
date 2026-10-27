@@ -158,6 +158,20 @@ quantity; zero/negative package measurements, range endpoints and unbounded
 prefixes do not. Discovery retains malformed quantity signals so they fail
 validation rather than disappearing.
 
+Separately rendered package metadata is normalized only when a supported positive
+mass/volume measurement, a literal ASCII period `.`, and an existing standalone
+`N unit(s)`, `Qty: N` or `Quantity: N` declaration are three
+adjacent fields sharing a parent inside one independently owned merchandise row.
+Only whitespace may separate those siblings. The normalization keeps the final
+purchased-unit declaration unchanged; package size never supplies quantity.
+The row must then have exactly one original name before that quantity and its
+independent price field(s) afterward. It rejects extra/misplaced metadata, unknown
+separators, hidden or historical conflicting metadata and product/control evidence
+inside the three fields. Product-name punctuation is preserved. Flat snapshot
+fragments alone cannot prove this structure and are still rejected by the pure
+parser; its name and quantity grammars are unchanged. Hiding or striking through
+both metadata fields cannot make the row fall back to a bare purchased count.
+
 The additional exact, case-sensitive form is
 `Approx. (lower-upper g) separator N unit(s)`. Its prefix includes the literal
 ASCII period, its parentheses and range hyphen are ASCII, and its gram endpoints
@@ -170,7 +184,9 @@ package descriptors but are not accepted for this approximate-weight form.
 Other prefixes, units, range punctuation, doubled/unknown separators, missing
 counts and non-increasing ranges remain unsupported. The entirely invented
 23-item accessibility fixture now uses this approximate gram-range form for its
-final row; all 23 products retain independently sourced prices and billed total.
+final row and separate package/period/count fields for the other 22 rows. All 23
+products retain their original names, independently sourced prices and billed
+total; the previous single-field presentations remain regression fixtures.
 
 Bill values come from individual label-bound rows, including `Inclusive of taxes`
 only as a subtitle of `You pay`; no flat sequence of unrelated tokens is paired.

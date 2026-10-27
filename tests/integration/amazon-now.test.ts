@@ -34,10 +34,274 @@ const original = readFileSync(
   join(__dirname, "fixtures/amazon-now-order.html"),
   "utf8",
 );
-const a11yPrices = readFileSync(
+const splitPackagePrices = readFileSync(
   join(__dirname, "fixtures/amazon-now-a11y-prices.html"),
   "utf8",
 );
+// Retain all earlier single-field presentation regressions alongside the updated fixture.
+const a11yPrices = splitPackagePrices.replace(
+  /<span class="package-size">(400 g|1 kg|500 g|0\.5 l)<\/span><span class="package-separator">\.<\/span><div class="quantity">1 unit<\/div>/g,
+  (_field, size: string) =>
+    `<div class="quantity">${
+      size === "400 g"
+        ? "250 g ·"
+        : size === "1 kg"
+          ? "2 kg •"
+          : size === "500 g"
+            ? "75 ml |"
+            : "0.5 l ·"
+    } 1 unit</div>`,
+);
+const splitPackage =
+  '<span class="package-size">400 g</span><span class="package-separator">.</span><div class="quantity">1 unit</div>';
+const splitPackageCases: [string, string][] = [
+  [
+    "hidden descriptor and separator",
+    splitPackagePrices.replace(
+      splitPackage,
+      splitPackage
+        .replace('class="package-size"', 'class="package-size" hidden')
+        .replace(
+          'class="package-separator"',
+          'class="package-separator" hidden',
+        ),
+    ),
+  ],
+  [
+    "historical descriptor and separator",
+    splitPackagePrices.replace(
+      splitPackage,
+      '<s>400 g</s><s>.</s><div class="quantity">1 unit</div>',
+    ),
+  ],
+  ...["unit only", "line only", "mismatched pair"].map(
+    (mode): [string, string] => [
+      mode,
+      splitPackagePrices
+        .replace(
+          '<div class="quantity">1 unit</div>',
+          '<div class="quantity">2 units</div>',
+        )
+        .replace(
+          /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
+          `<div aria-hidden="true">${mode !== "line only" ? "<div>Unit price: <span>₹</span><span>6.00</span></div>" : ""}${mode !== "unit only" ? "<div>Line total: <span>₹</span><span>11.00</span></div>" : ""}</div>`,
+        ),
+    ],
+  ),
+  [
+    "two-paise total mismatch",
+    splitPackagePrices.replace("You pay ₹506.00", "You pay ₹506.02"),
+  ],
+  ...[
+    "",
+    "0 g",
+    "-400 g",
+    "400 oz",
+    "400",
+    "g",
+    "400-500 g",
+    "Approx. 400 g",
+    "four hundred g",
+    "400 g extra",
+    "01 kg",
+    "1e3 g",
+    "400.001.2 g",
+  ].map((size): [string, string] => [
+    size,
+    splitPackagePrices.replace(
+      'class="package-size">400 g',
+      `class="package-size">${size}`,
+    ),
+  ]),
+  ...["·", "•", "|", "/", "..", ".·", "∙", ""].map(
+    (separator): [string, string] => [
+      `separator ${separator}`,
+      splitPackagePrices.replace(
+        'class="package-separator">.',
+        `class="package-separator">${separator}`,
+      ),
+    ],
+  ),
+  [
+    "duplicate separator",
+    splitPackagePrices.replace(
+      'class="package-separator">.</span>',
+      'class="package-separator">.</span><span>.</span>',
+    ),
+  ],
+  [
+    "duplicate measurement",
+    splitPackagePrices.replace(
+      splitPackage,
+      `<span>500 g</span>${splitPackage}`,
+    ),
+  ],
+  [
+    "misordered metadata",
+    splitPackagePrices.replace(
+      splitPackage,
+      '<span>.</span><span>400 g</span><div class="quantity">1 unit</div>',
+    ),
+  ],
+  [
+    "metadata after quantity",
+    splitPackagePrices.replace(
+      splitPackage,
+      '<div class="quantity">1 unit</div><span>400 g</span><span>.</span>',
+    ),
+  ],
+  [
+    "metadata before name",
+    splitPackagePrices.replace(
+      "<h3>Synthetic access item 01</h3>" + splitPackage,
+      splitPackage + "<h3>Synthetic access item 01</h3>",
+    ),
+  ],
+  [
+    "unrelated text between fields",
+    splitPackagePrices.replace(
+      splitPackage,
+      splitPackage.replace(
+        '<span class="package-separator">',
+        'Unknown<span class="package-separator">',
+      ),
+    ),
+  ],
+  [
+    "extra name",
+    splitPackagePrices.replace(
+      splitPackage,
+      `<div>Additional invented name</div>${splitPackage}`,
+    ),
+  ],
+  [
+    "different metadata parents",
+    splitPackagePrices.replace(
+      splitPackage,
+      '<div><span>400 g</span><span>.</span></div><div class="quantity">1 unit</div>',
+    ),
+  ],
+  [
+    "hidden descriptor",
+    splitPackagePrices.replace(
+      'class="package-size"',
+      'class="package-size" hidden',
+    ),
+  ],
+  [
+    "hidden separator",
+    splitPackagePrices.replace(
+      'class="package-separator"',
+      'class="package-separator" aria-hidden="true"',
+    ),
+  ],
+  [
+    "hidden conflicting descriptor",
+    splitPackagePrices.replace(
+      splitPackage,
+      `${splitPackage}<span hidden>500 g</span>`,
+    ),
+  ],
+  [
+    "historical conflicting descriptor",
+    splitPackagePrices.replace(splitPackage, `${splitPackage}<s>0 kg</s>`),
+  ],
+  [
+    "hidden conflicting separator",
+    splitPackagePrices.replace(
+      splitPackage,
+      `${splitPackage}<span hidden>.</span>`,
+    ),
+  ],
+  [
+    "hidden conflicting quantity",
+    splitPackagePrices.replace(
+      splitPackage,
+      `${splitPackage}<span hidden>Qty: 2</span>`,
+    ),
+  ],
+  [
+    "hidden field qualifier",
+    splitPackagePrices.replace(
+      'class="package-size">400 g</span>',
+      'class="package-size">400 g<span hidden>extra</span></span>',
+    ),
+  ],
+  [
+    "missing name",
+    splitPackagePrices.replace("<h3>Synthetic access item 01</h3>", ""),
+  ],
+  [
+    "missing quantity",
+    splitPackagePrices.replace('<div class="quantity">1 unit</div>', ""),
+  ],
+  [
+    "duplicate quantity",
+    splitPackagePrices.replace(
+      splitPackage,
+      `${splitPackage}<div>Qty: 1</div>`,
+    ),
+  ],
+  [
+    "compound quantity",
+    splitPackagePrices.replace(
+      '<div class="quantity">1 unit</div>',
+      '<div class="quantity">500 g · 1 unit</div>',
+    ),
+  ],
+  [
+    "unsafe quantity",
+    splitPackagePrices.replace(
+      '<div class="quantity">1 unit</div>',
+      '<div class="quantity">9007199254740992 units</div>',
+    ),
+  ],
+  [
+    "zero quantity",
+    splitPackagePrices.replace(
+      '<div class="quantity">1 unit</div>',
+      '<div class="quantity">0 units</div>',
+    ),
+  ],
+  [
+    "two units without prices",
+    splitPackagePrices.replace(
+      '<div class="quantity">1 unit</div>',
+      '<div class="quantity">2 units</div>',
+    ),
+  ],
+  [
+    "unexpected product identifier",
+    splitPackagePrices.replace(
+      splitPackage,
+      `<a href="/dp/B0FAKE0099"></a>${splitPackage}`,
+    ),
+  ],
+  [
+    "product evidence inside descriptor",
+    splitPackagePrices.replace(
+      'class="package-size">400 g</span>',
+      'class="package-size">400 g<a href="/dp/B0A11Y0001"></a></span>',
+    ),
+  ],
+  [
+    "missing price",
+    splitPackagePrices
+      .replace(/<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/, "")
+      .replace(/₹506.00/g, "₹495.00"),
+  ],
+  [
+    "bad price",
+    splitPackagePrices.replace('class="number">11.00', 'class="number">11.001'),
+  ],
+  [
+    "duplicate price",
+    splitPackagePrices.replace(
+      "<s>₹18.00</s>",
+      "<span>₹11.00</span><s>₹18.00</s>",
+    ),
+  ],
+];
 const approximateQuantity = "Approx. (120-180 g) . 1 unit";
 const chromeControl =
   /<button type="button" id="a11y-chrome">[\s\S]*?<\/button>/.exec(
@@ -498,6 +762,149 @@ browserTests("integrated Amazon Now extraction", () => {
       replacement,
     );
 
+  test("split package fields preserve the exact 23-item details and all product evidence", async () => {
+    expect(
+      splitPackagePrices.match(/class="package-size"/g) ?? [],
+    ).toHaveLength(22);
+    expect(
+      splitPackagePrices.match(/class="package-separator"/g) ?? [],
+    ).toHaveLength(22);
+    html = a11yPrices;
+    const previous = await extract();
+    html = splitPackagePrices;
+    const detail = await extract();
+    expect(detail).toEqual(previous);
+    expect(detail.items.map((item) => item.productName)).toEqual(
+      Array.from(
+        { length: 23 },
+        (_, i) => `Synthetic access item ${String(i + 1).padStart(2, "0")}`,
+      ),
+    );
+    expect(detail.items.map((item) => item.quantity)).toEqual(
+      Array(23).fill(1),
+    );
+    expect(detail.items.map((item) => item.itemTotal.amount)).toEqual(
+      Array.from({ length: 23 }, (_, i) => i + 11),
+    );
+    expect(detail.orderTotalSource).toBe("amazon-now-you-pay");
+    expect(
+      detail.adjustments.map((adjustment) => adjustment.amount?.amount),
+    ).toEqual([5, -5]);
+  });
+
+  test.each(["125 mg", "0.5 kg", "50 ml", "1.25 litres", "2 liters"])(
+    "split package metadata uses only the final purchased count: %s",
+    async (size) => {
+      html = splitPackagePrices.replace(
+        'class="package-size">400 g',
+        `class="package-size">${size}`,
+      );
+      expect((await extract()).items[0].quantity).toBe(1);
+    },
+  );
+
+  test.each([
+    "nested group",
+    "text period",
+    "punctuated name",
+    "two units",
+    "Qty: 1",
+    "Quantity: 1",
+  ])(
+    "split package normalization supports %s without inventing facts",
+    async (mode) => {
+      html = splitPackagePrices;
+      if (mode === "nested group")
+        html = html.replace(splitPackage, `<div>${splitPackage}</div>`);
+      if (mode === "text period")
+        html = html.replace('<span class="package-separator">.</span>', " . ");
+      if (mode === "punctuated name")
+        html = html.replace(
+          "Synthetic access item 01",
+          "Synthetic. item . 400 g",
+        );
+      if (mode === "Qty: 1" || mode === "Quantity: 1")
+        html = html.replace(
+          '<div class="quantity">1 unit</div>',
+          `<div class="quantity">${mode}</div>`,
+        );
+      if (mode === "two units")
+        html = html
+          .replace(
+            '<div class="quantity">1 unit</div>',
+            '<div class="quantity">2 units</div>',
+          )
+          .replace(
+            /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
+            '<div aria-hidden="true"><div>Unit price: <span>₹</span><span>5.50</span></div><div>Line total: <span>₹</span><span>11.00</span></div></div>',
+          );
+      const detail = await extract();
+      expect(detail.items).toHaveLength(23);
+      expect(detail.items[0].quantity).toBe(mode === "two units" ? 2 : 1);
+      expect(detail.items[0].unitPrice.amount).toBe(
+        mode === "two units" ? 5.5 : 11,
+      );
+      expect(detail.items[0].itemTotal.amount).toBe(11);
+      if (mode === "punctuated name")
+        expect(detail.items[0].productName).toBe("Synthetic. item . 400 g");
+    },
+  );
+
+  test.each([1, 2])(
+    "split package fixture retains the one-paise boundary: %s",
+    async (paise) => {
+      html = splitPackagePrices.replace(
+        "You pay ₹506.00",
+        `You pay ₹506.0${paise}`,
+      );
+      if (paise === 1) expect((await extract()).orderTotal.amount).toBe(506.01);
+      else
+        await expect(extract()).rejects.toMatchObject({
+          reason: "TOTAL_MISMATCH",
+        });
+    },
+  );
+
+  test.each(splitPackageCases)(
+    "split package invalid %s preserves prior JSON",
+    async (_name, fixture) => {
+      expect(fixture).not.toBe(splitPackagePrices);
+      html = fixture;
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-split-atomic-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Synthetic access|B0A11Y|₹|506\.00|amazon\.in|400 g/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    15000,
+  );
+
   test.each(["control only", "duration only", "both"])(
     "bounded non-merchandise images retain identical complete details: %s",
     async (mode) => {
@@ -675,7 +1082,7 @@ browserTests("integrated Amazon Now extraction", () => {
   });
 
   test("approximate-weight fixture publishes all 23 rows through the atomic JSON pipeline", async () => {
-    html = a11yPrices;
+    html = splitPackagePrices;
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
     const directory = await mkdtemp(join(tmpdir(), "now-approx-complete-"));
     const output = join(directory, "orders.json");
