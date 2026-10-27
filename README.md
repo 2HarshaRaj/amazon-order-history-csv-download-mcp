@@ -184,7 +184,20 @@ overlap, duplicates and unrecognized image/price ownership fail closed.
 Heading-free delivery-time messages can own an isolated single icon without a
 status role. This requires a complete delivered-duration message outside item/list
 boundaries, with no product links, ASIN candidates or financial evidence in that
-container. Other unowned images still fail closed.
+container. A separate minimal `div > [img, div]` decoration may contain two
+text-only leaves: `Delivered in N minutes` and `Arrived at H:MM AM/PM` (a valid
+12-hour clock time). The arrival leaf cannot include unrelated text, controls or
+additional images; the recognizer does not climb through the shared merchandise
+container to find an icon.
+
+One icon-only dialog control may also be excluded, strictly as
+`button > div > img` beside a single content `div` in a two-child `div` frame.
+That sibling content must contain Bill summary and every quantity candidate.
+Multiple matching controls, extra frame children/text, merchandise boundaries,
+quantity declarations, product links, ASIN-like imagery, monetary evidence and
+additional images disqualify the exclusion. Both new structures inspect hidden
+and historical evidence too. Images in merchandise buttons still require their
+normal merchandise owner. Other unowned images still fail closed.
 
 Explicit handling/delivery/shipping fee rows count only their effective charge;
 **Free** with a crossed-out fee contributes no adjustment. A handling-fee `Free for`

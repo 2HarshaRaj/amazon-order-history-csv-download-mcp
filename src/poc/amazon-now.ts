@@ -664,9 +664,103 @@ async function readNowDom(
         const deliveryMessage =
           /^(?:Order\s+)?delivered\s+in\s+[1-9]\d*\s+(?:min(?:ute)?s?|h(?:ou)?rs?)(?:\s+(?:and\s+)?\d+\s+min(?:ute)?s?)?$/i;
         const merchandiseBoundary = "article, li, [role=list], [role=listitem]";
+        const directText = (el: Element): boolean =>
+          Array.from(el.childNodes).some(
+            (node) => node.nodeType === 3 && node.textContent?.trim(),
+          );
+        // These additional exclusions require the observed minimal structures.
+        // Inspect all images/raw text too: hidden, historical or product evidence
+        // must not disappear while establishing a non-merchandise boundary.
+        const isolatedIcon = (scope: Element): boolean => {
+          const icons = Array.from(scope.querySelectorAll("img"));
+          return (
+            current(scope) &&
+            !scope.closest(merchandiseBoundary) &&
+            !scope.querySelector(merchandiseBoundary) &&
+            !scope.contains(billRoot) &&
+            !scope.closest(productLink) &&
+            !scope.querySelector(productLink) &&
+            !scope.querySelector(
+              "button, [role=button], a, input, select, textarea",
+            ) &&
+            !/₹|\bINR\b|[$€£¥]|\b(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?\b/i.test(
+              scope.textContent ?? "",
+            ) &&
+            icons.length === 1 &&
+            current(icons[0]) &&
+            !/\b[A-Z0-9]{10}\b|₹|\bINR\b|[$€£¥]/.test(
+              icons[0].getAttribute("alt") ?? "",
+            ) &&
+            !Array.from(scope.querySelectorAll("*")).some(
+              (el) => el.textContent?.trim() && !current(el),
+            )
+          );
+        };
+        const allQuantities = exact(root, quantitySignal);
+        const chromeControls = nodes.filter((button) => {
+          if (
+            button.tagName !== "BUTTON" ||
+            button.textContent?.trim() ||
+            button.children.length !== 1 ||
+            !isolatedIcon(button)
+          )
+            return false;
+          const iconWrapper = button.children[0];
+          const frame = button.parentElement;
+          if (
+            iconWrapper.tagName !== "DIV" ||
+            iconWrapper.children.length !== 1 ||
+            iconWrapper.children[0].tagName !== "IMG" ||
+            !frame ||
+            frame === root ||
+            frame.tagName !== "DIV" ||
+            frame.closest(merchandiseBoundary) ||
+            frame.children.length !== 2 ||
+            directText(frame)
+          )
+            return false;
+          const content = Array.from(frame.children).find(
+            (el) => el !== button,
+          );
+          return (
+            content?.tagName === "DIV" &&
+            content.contains(billRoot) &&
+            allQuantities.length > 0 &&
+            allQuantities.every((quantity) => content.contains(quantity))
+          );
+        });
+        // Multiple matching controls are ambiguous; leave every image owned by
+        // the normal merchandise checks rather than choosing one by position.
+        if (chromeControls.length === 1) nonItemRoots.push(chromeControls[0]);
+
+        const arrivalMessage =
+          /^arrived\s+at\s+(?:0?[1-9]|1[0-2]):[0-5]\d\s+(?:am|pm)$/i;
         for (const message of exact(root, deliveryMessage)) {
           const itemAncestor = message.closest(merchandiseBoundary);
           if (itemAncestor && root.contains(itemAncestor)) continue;
+          const timing = message.parentElement;
+          const decoration = timing?.parentElement;
+          if (
+            /^delivered\s+in\s+[1-9]\d*\s+minutes$/i.test(text(message)) &&
+            message.children.length === 0 &&
+            timing?.tagName === "DIV" &&
+            timing.children.length === 2 &&
+            timing.children[0] === message &&
+            timing.children[1].children.length === 0 &&
+            arrivalMessage.test(text(timing.children[1])) &&
+            !directText(timing) &&
+            decoration &&
+            decoration !== root &&
+            decoration.tagName === "DIV" &&
+            decoration.children.length === 2 &&
+            decoration.children[0].tagName === "IMG" &&
+            decoration.children[1] === timing &&
+            !directText(decoration) &&
+            isolatedIcon(decoration)
+          ) {
+            nonItemRoots.push(decoration);
+            continue;
+          }
           let scope: Element | null = message;
           for (
             let depth = 0;

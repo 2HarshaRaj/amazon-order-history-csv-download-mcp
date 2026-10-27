@@ -39,6 +39,246 @@ const a11yPrices = readFileSync(
   "utf8",
 );
 const approximateQuantity = "Approx. (120-180 g) . 1 unit";
+const chromeControl =
+  /<button type="button" id="a11y-chrome">[\s\S]*?<\/button>/.exec(
+    a11yPrices,
+  )?.[0] ?? "";
+const durationDecoration =
+  /<div id="a11y-duration">[\s\S]*?<\/div><\/div><\/div>/.exec(
+    a11yPrices,
+  )?.[0] ?? "";
+const decorationIcon = /<img[^>]+>/.exec(durationDecoration)?.[0] ?? "";
+const nonItemImageCases: [string, string][] = [
+  [
+    "text-bearing button",
+    a11yPrices.replace("</button><div", "Unknown</button><div"),
+  ],
+  [
+    "hidden button text",
+    a11yPrices.replace(
+      "</button><div",
+      "<span hidden>Unknown</span></button><div",
+    ),
+  ],
+  [
+    "button with extra image",
+    a11yPrices.replace(
+      chromeControl,
+      chromeControl.replace("</button>", `${decorationIcon}</button>`),
+    ),
+  ],
+  [
+    "button with historical money",
+    a11yPrices.replace(
+      chromeControl,
+      chromeControl.replace("</div>", "<s>₹1.00</s></div>"),
+    ),
+  ],
+  [
+    "button with hidden quantity",
+    a11yPrices.replace(
+      chromeControl,
+      chromeControl.replace("</div>", "<span hidden>Qty: 1</span></div>"),
+    ),
+  ],
+  [
+    "button with product link",
+    a11yPrices.replace(
+      chromeControl,
+      chromeControl.replace("</div>", '<a href="/dp/B0FAKE0099"></a></div>'),
+    ),
+  ],
+  [
+    "button with ASIN imagery",
+    a11yPrices.replace("Invented dialog control", "Product B0FAKE0099 image"),
+  ],
+  [
+    "button on merchandise boundary",
+    a11yPrices.replace('id="a11y-chrome"', 'id="a11y-chrome" role="listitem"'),
+  ],
+  [
+    "nested control in button",
+    a11yPrices.replace(
+      chromeControl,
+      chromeControl.replace("<img", '<span role="button"></span><img'),
+    ),
+  ],
+  [
+    "extra sibling control",
+    a11yPrices.replace(chromeControl, chromeControl.repeat(2)),
+  ],
+  [
+    "extra empty sibling control",
+    a11yPrices.replace(chromeControl, `${chromeControl}<button></button>`),
+  ],
+  [
+    "two independently matching chrome controls",
+    a11yPrices
+      .replace(
+        '<div id="a11y-frame">',
+        `<div>${chromeControl.replace('id="a11y-chrome"', 'id="a11y-outer-chrome"')}<div><div id="a11y-frame">`,
+      )
+      .replace("</div></div></section>", "</div></div></div></div></section>"),
+  ],
+  [
+    "button without its observed div wrapper",
+    a11yPrices.replace(
+      chromeControl,
+      chromeControl.replace("<div>", "<span>").replace("</div>", "</span>"),
+    ),
+  ],
+  [
+    "quantity outside the sibling content",
+    a11yPrices.replace(
+      "</div></div></section>",
+      "</div></div><div>Qty: 1</div></section>",
+    ),
+  ],
+  [
+    "unrelated frame text",
+    a11yPrices.replace(chromeControl, `${chromeControl}Unknown`),
+  ],
+  [
+    "unowned merchandise button",
+    a11yPrices.replace(
+      '<div role="list" id="a11y-merchandise">',
+      `<button><div>${decorationIcon.replace("Invented duration icon", "B0FAKE0099")}</div></button><div role="list" id="a11y-merchandise">`,
+    ),
+  ],
+  [
+    "button in incomplete merchandise",
+    a11yPrices
+      .replace("250 g · 1 unit", "")
+      .replace('<img alt="B0A11Y0001"', '<button><div><img alt="B0A11Y0001"')
+      .replace(
+        "<h3>Synthetic access item 01",
+        "</div></button><h3>Synthetic access item 01",
+      ),
+  ],
+  ...[
+    "Arrived soon",
+    "Arrived by 4:26 PM",
+    "Arrived at 0:26 PM",
+    "Arrived at 13:26 PM",
+    "Arrived at 4:60 PM",
+    "Arrived at 4:26",
+    "Arrived at 4:26 ZZ",
+    "Arrived at 4:26 PM extra",
+  ].map((value): [string, string] => [
+    value,
+    a11yPrices.replace("Arrived at 4:26 PM", value),
+  ]),
+  [
+    "unrelated duration suffix",
+    a11yPrices.replace(
+      "Delivered in 17 minutes",
+      "Delivered in 17 minutes extra",
+    ),
+  ],
+  [
+    "unverified arrival",
+    a11yPrices.replace(
+      "<div>Arrived at 4:26 PM</div>",
+      "<div>Arrival unavailable</div>",
+    ),
+  ],
+  [
+    "hidden arrival",
+    a11yPrices.replace("<div>Arrived at", "<div hidden>Arrived at"),
+  ],
+  [
+    "additional arrival leaf",
+    a11yPrices.replace(
+      "<div>Arrived at 4:26 PM</div>",
+      "<div>Arrived at 4:26 PM</div><div>Arrived at 5:26 PM</div>",
+    ),
+  ],
+  [
+    "unrelated delivery text",
+    a11yPrices.replace("<div>Arrived at", "Unknown<div>Arrived at"),
+  ],
+  [
+    "additional delivery image",
+    a11yPrices.replace(decorationIcon, decorationIcon.repeat(2)),
+  ],
+  [
+    "hidden additional image",
+    a11yPrices.replace(
+      decorationIcon,
+      `${decorationIcon}${decorationIcon.replace("<img", "<img hidden")}`,
+    ),
+  ],
+  [
+    "delivery product imagery",
+    a11yPrices.replace("Invented duration icon", "Product B0FAKE0099 image"),
+  ],
+  [
+    "delivery product link",
+    a11yPrices.replace(
+      "<div>Arrived at",
+      '<a href="/dp/B0FAKE0099"></a><div>Arrived at',
+    ),
+  ],
+  [
+    "delivery monetary evidence",
+    a11yPrices.replace(
+      "<div>Arrived at",
+      '<span aria-hidden="true">₹1.00</span><div>Arrived at',
+    ),
+  ],
+  [
+    "delivery historical evidence",
+    a11yPrices.replace("<div>Arrived at", "<s>$1.00</s><div>Arrived at"),
+  ],
+  [
+    "delivery quantity evidence",
+    a11yPrices.replace("<div>Arrived at", "<span>1 unit</span><div>Arrived at"),
+  ],
+  [
+    "delivery merchandise boundary",
+    a11yPrices.replace(
+      'id="a11y-duration"',
+      'id="a11y-duration" role="listitem"',
+    ),
+  ],
+  [
+    "delivery nested control",
+    a11yPrices.replace(
+      "<div>Arrived at 4:26 PM</div>",
+      "<button>Arrived at 4:26 PM</button>",
+    ),
+  ],
+  [
+    "unowned image in shared ancestor",
+    a11yPrices
+      .replace(decorationIcon, "")
+      .replace(
+        '<div role="list" id="a11y-merchandise">',
+        `${decorationIcon}<div role="list" id="a11y-merchandise">`,
+      ),
+  ],
+  [
+    "missing merchandise",
+    a11yPrices.replace(
+      /<article role="listitem" id="a11y-row-1">[\s\S]*?<\/article>/,
+      "",
+    ),
+  ],
+  [
+    "missing merchandise price despite adjusted total",
+    a11yPrices
+      .replace(/<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/, "")
+      .replace(/₹506.00/g, "₹495.00"),
+  ],
+  [
+    "invalid billed total",
+    a11yPrices.replace("You pay ₹506.00", "You pay ₹506.02"),
+  ],
+  [
+    "invalid fee",
+    a11yPrices.replace("Handling fee ₹5.00", "Handling fee ₹5.00 ₹7.00"),
+  ],
+];
 const ownership = readFileSync(
   join(__dirname, "fixtures/amazon-now-ownership.html"),
   "utf8",
@@ -258,6 +498,91 @@ browserTests("integrated Amazon Now extraction", () => {
       replacement,
     );
 
+  test.each(["control only", "duration only", "both"])(
+    "bounded non-merchandise images retain identical complete details: %s",
+    async (mode) => {
+      expect(chromeControl).not.toBe("");
+      expect(durationDecoration).not.toBe("");
+      html = a11yPrices
+        .replace(chromeControl, "")
+        .replace(durationDecoration, "");
+      const baseline = await extract();
+      html = a11yPrices;
+      if (mode === "control only") html = html.replace(durationDecoration, "");
+      if (mode === "duration only") html = html.replace(chromeControl, "");
+      expect(await extract()).toEqual(baseline);
+    },
+  );
+
+  test.each(["Arrived at 12:00 AM", "arrived at 01:59 pm"])(
+    "bounded arrival leaf accepts only a complete clock time: %s",
+    async (arrival) => {
+      html = a11yPrices.replace("Arrived at 4:26 PM", arrival);
+      expect((await extract()).items).toHaveLength(23);
+    },
+  );
+
+  test("the existing duration-only icon rule retains its behavior", async () => {
+    html = a11yPrices.replace("<div>Arrived at 4:26 PM</div>", "");
+    expect((await extract()).items).toHaveLength(23);
+  });
+
+  test("an image in a complete merchandise button retains its merchandise owner", async () => {
+    html = a11yPrices
+      .replace('<img alt="B0A11Y0001"', '<button><div><img alt="B0A11Y0001"')
+      .replace(
+        "<h3>Synthetic access item 01",
+        "</div></button><h3>Synthetic access item 01",
+      );
+    const detail = await extract();
+    expect(detail.items).toHaveLength(23);
+    expect(detail.items[0]).toMatchObject({
+      asin: "B0A11Y0001",
+      quantity: 1,
+      itemTotal: { amount: 11 },
+    });
+  });
+
+  test.each(nonItemImageCases)(
+    "bounded non-merchandise exclusion rejects %s atomically",
+    async (_label, fixture) => {
+      expect(fixture).not.toBe(a11yPrices);
+      html = fixture;
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-icon-atomic-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Synthetic access|B0A11Y|₹|506\.00|amazon\.in|Arrived at|Delivered in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    15000,
+  );
+
   test("accessibility-hidden visual prices keep all 23 independent products and the billed total", async () => {
     html = a11yPrices;
     const detail = await extract();
@@ -382,6 +707,11 @@ browserTests("integrated Amazon Now extraction", () => {
         ),
       ).toEqual(Array.from({ length: 23 }, (_, i) => i + 11));
       expect(document.orders[0].orderTotal).toBe(506);
+      expect(
+        document.orders[0].adjustments.map(
+          (adjustment: { amount: number }) => adjustment.amount,
+        ),
+      ).toEqual([5, -5]);
       expect(report).not.toHaveBeenCalled();
       expect(await readdir(directory)).toEqual(["orders.json"]);
     } finally {

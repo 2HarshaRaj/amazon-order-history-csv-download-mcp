@@ -1,7 +1,8 @@
 <!doctype html><meta charset="utf-8"><style>img {width:20px;height:20px} article {display:flex;gap:8px}</style>
 <main><div>Order ID: 111-2222222-3333333</div><button onclick="document.querySelector('#a11y-sheet').hidden=false">View order details</button></main>
-<section role="dialog" id="a11y-sheet" hidden><h1>Order Details</h1><div id="a11y-owner">Order ID: 111-2222222-3333333</div>
+<section role="dialog" id="a11y-sheet" hidden><div id="a11y-frame"><button type="button" id="a11y-chrome"><div><img alt="Invented dialog control" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></div></button><div id="a11y-content"><h1>Order Details</h1><div id="a11y-owner">Order ID: 111-2222222-3333333</div>
 <section><h2>Delivery status</h2><img alt="Invented delivery icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><span>Delivered</span><span aria-hidden="true">₹999.00</span></section>
+<div id="a11y-duration"><img alt="Invented duration icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><div><div>Delivered in 17 minutes</div><div>Arrived at 4:26 PM</div></div></div>
 <div role="list" id="a11y-merchandise">
 <article role="listitem" id="a11y-row-1"><img alt="B0A11Y0001" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><h3>Synthetic access item 01</h3><div class="quantity">250 g · 1 unit</div><div id="a11y-price-1" aria-hidden="true"><span class="currency">₹</span><span class="number">11.00</span><s>₹18.00</s></div></article>
 <article role="listitem" id="a11y-row-2"><img alt="B0A11Y0002" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><h3>Synthetic access item 02</h3><div class="quantity">250 g · 1 unit</div><div id="a11y-price-2"><span class="currency" aria-hidden="true">₹</span><span class="number" aria-hidden="true">12.00</span><s>₹19.00</s></div></article>
@@ -29,4 +30,4 @@
 </div>
 <section id="a11y-bill"><h2>Bill summary</h2><div>Items total ₹506.00</div><div>Handling fee ₹5.00</div><div>Delivery fee Free<s>₹8.00</s></div><div>Discount -₹5.00</div><div id="a11y-total">You pay ₹506.00</div></section>
 <section><h2>Payment method</h2><img alt="Invented payment icon" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><div>Gift Card ₹200.00</div><div>Voucher ₹100.00</div><div>Payment card ₹206.00</div><span aria-hidden="true">₹777.00</span></section>
-</section>
+</div></div></section>
