@@ -172,6 +172,17 @@ fragments alone cannot prove this structure and are still rejected by the pure
 parser; its name and quantity grammars are unchanged. Hiding or striking through
 both metadata fields cannot make the row fall back to a bare purchased count.
 
+The same bounded structure also supports exactly `Pack of N, M Tablets` as its
+descriptor, using the fixed capitalization and ASCII comma after existing
+whitespace normalization. Both `N` and `M` must be positive safe integers, with no
+signs, decimals, leading zeros or exponent notation. Neither count supplies
+purchased quantity; only the independent purchased-unit declaration does. Other
+pack categories, punctuation, qualifiers and arbitrary retail descriptions are
+unsupported. Hidden or historical pack evidence, including malformed/unsupported
+`Pack` metadata, cannot disappear to permit a bare-count fallback. The invented
+eight-item tablet fixture covers seven measurements plus this descriptor; the
+23-item fixtures retain their existing presentations.
+
 The additional exact, case-sensitive form is
 `Approx. (lower-upper g) separator N unit(s)`. Its prefix includes the literal
 ASCII period, its parentheses and range hyphen are ASCII, and its gram endpoints

@@ -38,6 +38,198 @@ const splitPackagePrices = readFileSync(
   join(__dirname, "fixtures/amazon-now-a11y-prices.html"),
   "utf8",
 );
+const tabletOrder = readFileSync(
+  join(__dirname, "fixtures/amazon-now-tablets.html"),
+  "utf8",
+);
+const tabletDescriptor = "Pack of 1, 60 Tablets";
+const tabletFields = `<span class="package-size">${tabletDescriptor}</span><span class="package-separator">.</span><div class="quantity">1 unit</div>`;
+const tabletCases: [string, string][] = [
+  ...[
+    "Pack of 0, 60 Tablets",
+    "Pack of 1, 0 Tablets",
+    "Pack of 9007199254740992, 60 Tablets",
+    "Pack of 1, 9007199254740992 Tablets",
+    "Pack of -1, 60 Tablets",
+    "Pack of 1, -60 Tablets",
+    "Pack of 1.5, 60 Tablets",
+    "Pack of 1, 60.5 Tablets",
+    "Pack of 01, 60 Tablets",
+    "Pack of 1, 060 Tablets",
+    "Pack of +1, 60 Tablets",
+    "Pack of 1e2, 60 Tablets",
+    "Pack of 1; 60 Tablets",
+    "Pack of 1， 60 Tablets",
+    "Pack of 1,60 Tablets",
+    "Pack of 1, 60 Tablet",
+    "Pack of 1, 60 Capsules",
+    "Pack of 1, 60 Sheets",
+    "Pack of 1, 60 tablets",
+    "pack of 1, 60 Tablets",
+    "Pack of , 60 Tablets",
+    "Pack of 1, Tablets",
+    "Pack of 1, 60",
+    "60 Tablets, Pack of 1",
+    "Pack of 1, 60 Tablets extra",
+    "Box of 1, 60 Tablets",
+    "Pack of 1, 60 Tablets.",
+    "",
+  ].map((value): [string, string] => [
+    value,
+    tabletOrder.replace(tabletDescriptor, value),
+  ]),
+  [
+    "duplicate descriptor",
+    tabletOrder.replace(
+      tabletFields,
+      `<span>${tabletDescriptor}</span>${tabletFields}`,
+    ),
+  ],
+  [
+    "reordered fields",
+    tabletOrder.replace(
+      tabletFields,
+      `<span>.</span><span>${tabletDescriptor}</span><div class="quantity">1 unit</div>`,
+    ),
+  ],
+  [
+    "missing separator",
+    tabletOrder.replace(
+      tabletFields,
+      `<span>${tabletDescriptor}</span><div class="quantity">1 unit</div>`,
+    ),
+  ],
+  [
+    "wrong separator",
+    tabletOrder.replace(
+      tabletFields,
+      tabletFields.replace(
+        'class="package-separator">.',
+        'class="package-separator">·',
+      ),
+    ),
+  ],
+  [
+    "duplicate separator",
+    tabletOrder.replace(
+      tabletFields,
+      tabletFields.replace("</span><div", "</span><span>.</span><div"),
+    ),
+  ],
+  [
+    "missing count",
+    tabletOrder.replace(
+      tabletFields,
+      tabletFields.replace('<div class="quantity">1 unit</div>', ""),
+    ),
+  ],
+  [
+    "duplicate count",
+    tabletOrder.replace(tabletFields, `${tabletFields}<div>Qty: 1</div>`),
+  ],
+  [
+    "different parents",
+    tabletOrder.replace(
+      tabletFields,
+      `<div><span>${tabletDescriptor}</span><span>.</span></div><div class="quantity">1 unit</div>`,
+    ),
+  ],
+  [
+    "hidden descriptor",
+    tabletOrder.replace(
+      tabletFields,
+      tabletFields.replace(
+        'class="package-size"',
+        'class="package-size" hidden',
+      ),
+    ),
+  ],
+  [
+    "hidden descriptor and separator",
+    tabletOrder.replace(
+      tabletFields,
+      tabletFields
+        .replace('class="package-size"', 'class="package-size" hidden')
+        .replace(
+          'class="package-separator"',
+          'class="package-separator" hidden',
+        ),
+    ),
+  ],
+  [
+    "historical descriptor and separator",
+    tabletOrder.replace(
+      tabletFields,
+      `<s>${tabletDescriptor}</s><s>.</s><div class="quantity">1 unit</div>`,
+    ),
+  ],
+  ...[tabletDescriptor, "Pack of 0, 60 Tablets", "Pack of 1, 60 Capsules"].map(
+    (value): [string, string] => [
+      `hidden extra ${value}`,
+      tabletOrder.replace(
+        tabletFields,
+        `${tabletFields}<span hidden>${value}</span>`,
+      ),
+    ],
+  ),
+  [
+    "historical extra descriptor",
+    tabletOrder.replace(
+      tabletFields,
+      `${tabletFields}<s>${tabletDescriptor}</s>`,
+    ),
+  ],
+  [
+    "hidden qualifier",
+    tabletOrder.replace(
+      tabletDescriptor,
+      `${tabletDescriptor}<span hidden>extra</span>`,
+    ),
+  ],
+  [
+    "extra name",
+    tabletOrder.replace(
+      tabletFields,
+      `<div>Extra invented name</div>${tabletFields}`,
+    ),
+  ],
+  [
+    "ambiguous descriptor name",
+    tabletOrder.replace("Invented tablet-fixture item 08", tabletDescriptor),
+  ],
+  ["missing name", tabletOrder.replace("Invented tablet-fixture item 08", "")],
+  [
+    "product link in descriptor",
+    tabletOrder.replace(
+      tabletDescriptor,
+      `${tabletDescriptor}<a href="/dp/B0PACK0008"></a>`,
+    ),
+  ],
+  [
+    "unexpected product identity",
+    tabletOrder.replace(
+      tabletFields,
+      `<a href="/dp/B0FAKE0099"></a>${tabletFields}`,
+    ),
+  ],
+  [
+    "missing price",
+    tabletOrder
+      .replace(/<div id="pack-price-8"[^>]*>[\s\S]*?<\/div>/, "")
+      .replace("You pay ₹141.00", "You pay ₹120.00"),
+  ],
+  [
+    "two units without unit price",
+    tabletOrder.replace(
+      tabletFields,
+      tabletFields.replace("1 unit", "2 units"),
+    ),
+  ],
+  [
+    "invalid billed total",
+    tabletOrder.replace("You pay ₹141.00", "You pay ₹141.02"),
+  ],
+];
 // Retain all earlier single-field presentation regressions alongside the updated fixture.
 const a11yPrices = splitPackagePrices.replace(
   /<span class="package-size">(400 g|1 kg|500 g|0\.5 l)<\/span><span class="package-separator">\.<\/span><div class="quantity">1 unit<\/div>/g,
@@ -761,6 +953,153 @@ browserTests("integrated Amazon Now extraction", () => {
       /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
       replacement,
     );
+
+  test("tablet pack fixture exports eight exact products, adjustments and independent billed total atomically", async () => {
+    html = tabletOrder;
+    const detail = await extract();
+    expect(detail.items.map((item) => item.productName)).toEqual(
+      Array.from(
+        { length: 8 },
+        (_, i) =>
+          `Invented tablet-fixture item ${String(i + 1).padStart(2, "0")}`,
+      ),
+    );
+    expect(detail.items.map((item) => item.quantity)).toEqual(Array(8).fill(1));
+    expect(detail.items.map((item) => item.unitPrice.amount)).toEqual(
+      Array.from({ length: 8 }, (_, i) => i + 14),
+    );
+    expect(detail.items.map((item) => item.itemTotal.amount)).toEqual(
+      Array.from({ length: 8 }, (_, i) => i + 14),
+    );
+    expect(detail.items.map((item) => item.asin)).toEqual(
+      Array.from({ length: 8 }, (_, i) =>
+        i === 3 ? "" : `B0PACK${String(i + 1).padStart(4, "0")}`,
+      ),
+    );
+    expect(detail.adjustments.map((item) => item.amount?.amount)).toEqual([
+      4, -3,
+    ]);
+    expect(detail).toMatchObject({
+      itemCount: 8,
+      orderTotal: { amount: 141 },
+      orderTotalSource: "amazon-now-you-pay",
+      extractionSource: "amazon-now-order-details",
+    });
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(join(tmpdir(), "now-tablet-complete-"));
+    const output = join(directory, "orders.json");
+    try {
+      await runExport({ ...options, output }, () => {}, {
+        list: listOrders,
+        extract: extractOrderItems,
+        write: validateAndWriteExport,
+        report: async () => {},
+        cleanup: async () => {},
+      });
+      const document = JSON.parse(await readFile(output, "utf8"));
+      expect(
+        document.orders[0].items.map(
+          (item: { lineIndex: number }) => item.lineIndex,
+        ),
+      ).toEqual(Array.from({ length: 8 }, (_, i) => i));
+      expect(
+        document.orders[0].items.map(
+          (item: { productName: string }) => item.productName,
+        ),
+      ).toEqual(detail.items.map((item) => item.productName));
+      expect(document.orders[0].orderTotal).toBe(141);
+      expect(await readdir(directory)).toEqual(["orders.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    "Pack of 3, 84 Tablets",
+    "Pack of 9007199254740991, 9007199254740991 Tablets",
+  ])(
+    "tablet pack counts never supply purchased units: %s",
+    async (descriptor) => {
+      html = tabletOrder.replace(tabletDescriptor, descriptor);
+      expect((await extract()).items[7]).toMatchObject({
+        quantity: 1,
+        unitPrice: { amount: 21 },
+        itemTotal: { amount: 21 },
+      });
+    },
+  );
+
+  test.each(["punctuated name", "Pack of name", "two purchased units"])(
+    "tablet pack preserves %s",
+    async (mode) => {
+      html = tabletOrder;
+      const name =
+        mode === "Pack of name"
+          ? "Pack of imaginary sunshine"
+          : "Invented. tablet . item 08";
+      if (mode !== "two purchased units")
+        html = html.replace("Invented tablet-fixture item 08", name);
+      else
+        html = html
+          .replace(tabletFields, tabletFields.replace("1 unit", "2 units"))
+          .replace(
+            /<div id="pack-price-8"[^>]*>[\s\S]*?<\/div>/,
+            '<div aria-hidden="true"><div>Unit price: <span>₹</span><span>10.50</span></div><div>Line total: <span>₹</span><span>21.00</span></div></div>',
+          );
+      const detail = await extract();
+      expect(detail.items).toHaveLength(8);
+      expect(detail.items[7].quantity).toBe(
+        mode === "two purchased units" ? 2 : 1,
+      );
+      if (mode !== "two purchased units")
+        expect(detail.items[7].productName).toBe(name);
+      else
+        expect(detail.items[7]).toMatchObject({
+          unitPrice: { amount: 10.5 },
+          itemTotal: { amount: 21 },
+        });
+    },
+  );
+
+  test.each(tabletCases)(
+    "tablet pack invalid %s preserves prior JSON",
+    async (_name, fixture) => {
+      expect(fixture).not.toBe(tabletOrder);
+      html = fixture;
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-tablet-atomic-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toMatchObject({ category: "validation" });
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Invented tablet|B0PACK|Pack of|₹|141\.00|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+    15000,
+  );
 
   test("split package fields preserve the exact 23-item details and all product evidence", async () => {
     expect(

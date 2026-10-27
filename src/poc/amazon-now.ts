@@ -1036,6 +1036,19 @@ async function readNowDom(
         reason = "NOW_ITEM_FIELDS_INVALID";
         const packageSize =
           /^(?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*(?:mg|g|kg|ml|l|litres?|liters?)$/i;
+        const packageDescriptor = (value: string): boolean => {
+          if (packageSize.test(value)) return true;
+          const tablets = /^Pack of ([1-9]\d*), ([1-9]\d*) Tablets$/.exec(
+            value,
+          );
+          // Pack size and tablet count are metadata, never purchased units.
+          return (
+            tablets !== null &&
+            tablets
+              .slice(1)
+              .every((count) => Number.isSafeInteger(Number(count)))
+          );
+        };
         const purchasedUnits =
           /^(?:(?:qty|quantity)\s*:\s*[1-9]\d*|[1-9]\d*\s+unit(?:s|\(s\))?)$/i;
         const fieldText = (node: Node | undefined): string =>
@@ -1080,7 +1093,7 @@ async function readNowDom(
                   ? itemText(node as Element)
                   : "";
             if (!part) continue;
-            if (packageSize.test(part)) {
+            if (packageDescriptor(part)) {
               const nextField = (start: number): number => {
                 while (
                   start < children.length &&
@@ -1144,7 +1157,8 @@ async function readNowDom(
             elements(row).some((el) => {
               const raw = el.textContent?.replace(/\s+/g, " ").trim() ?? "";
               return (
-                (/^[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*[a-z]+$/i.test(raw) ||
+                (/^pack\b/i.test(raw) ||
+                  /^[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*[a-z]+$/i.test(raw) ||
                   (split.length &&
                     (quantitySignal.test(raw) || /^[.·•|:;/]+$/.test(raw)))) &&
                 !current(el)
@@ -1155,7 +1169,7 @@ async function readNowDom(
           if (split.length) {
             if (
               ![3, 4].includes(parts.length) ||
-              packageSize.test(parts[0]) ||
+              packageDescriptor(parts[0]) ||
               parts[0] === "." ||
               /₹|\bINR\b/i.test(parts[0]) ||
               !purchasedUnits.test(parts[1]) ||

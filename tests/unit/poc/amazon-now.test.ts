@@ -40,6 +40,10 @@ function fixture(): NowSnapshot {
 
 describe("Amazon Now fact validation (no Chromium)", () => {
   test.each([
+    ["Pack of 1, 60 Tablets", ".", "1 unit"],
+    ["Pack of 2, 120 Tablets", ".", "2 units"],
+    ["Pack of 1, 60 Tablets"],
+    ["Pack of 1, 60 Tablets . 1 unit"],
     ["400 g", ".", "1 unit"],
     ["1 kg", ".", "1 unit"],
     ["0 g", ".", "1 unit"],
@@ -58,7 +62,7 @@ describe("Amazon Now fact validation (no Chromium)", () => {
       expect(() => parseNowSnapshot(facts, id)).toThrow();
     },
   );
-  test.each(["Invented. name . 400 g", ".", "400 g"])(
+  test.each(["Invented. name . 400 g", ".", "400 g", "Pack of 1, 60 Tablets"])(
     "preserves the exact sole product-name field: %s",
     (name) => {
       const facts = fixture();
