@@ -183,6 +183,24 @@ unsupported. Hidden or historical pack evidence, including malformed/unsupported
 eight-item tablet fixture covers seven measurements plus this descriptor; the
 23-item fixtures retain their existing presentations.
 
+The same DOM-adjacent normalization also recognizes the case-sensitive piece
+packaging descriptors `N Pcs (Approx. X–Y g)` and `N Pcs (X–Y g)`. `N` must be a
+positive safe integer with canonical digit syntax. Both gram endpoints must be
+positive decimals in strictly increasing order, compared exactly as decimal
+strings. The range accepts only an ASCII hyphen `-` or en dash `–` (U+2013).
+Only these piece descriptors additionally permit a separate literal middle dot
+`·` (U+00B7); the existing ASCII period `.` remains valid. Other package types
+retain their period-only split-field rule. No punctuation is ignored.
+
+The descriptor, separator and separate purchased-unit declaration must remain
+current, independently bounded adjacent siblings under the existing ownership
+checks. Only the final purchased-unit declaration supplies quantity: neither
+piece count nor weight endpoints do. Invalid ranges, unknown qualifiers/units,
+extra names, duplicate/misplaced fields, nested product/control evidence and
+hidden/struck-through piece metadata remain rejected. Names retain their exact
+text. The invented five-item piece fixture includes both new descriptors alongside
+mass/volume, tablet-pack and single-field approximate-weight regressions.
+
 The additional exact, case-sensitive form is
 `Approx. (lower-upper g) separator N unit(s)`. Its prefix includes the literal
 ASCII period, its parentheses and range hyphen are ASCII, and its gram endpoints

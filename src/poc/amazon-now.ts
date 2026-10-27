@@ -1053,8 +1053,31 @@ async function readNowDom(
         reason = "NOW_ITEM_FIELDS_INVALID";
         const packageSize =
           /^(?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*(?:mg|g|kg|ml|l|litres?|liters?)$/i;
+        const piecePackage =
+          /^([1-9]\d*) Pcs \((?:Approx\. )?([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*[-–]\s*([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g\)$/;
+        // Discovery for hidden/historical conflicts only, never acceptance.
+        const piecePackageSignal =
+          /^(?:[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*)?Pcs\b/i;
+        const pieceDescriptor = (value: string): boolean => {
+          const pieces = piecePackage.exec(value);
+          if (!pieces || !Number.isSafeInteger(Number(pieces[1]))) return false;
+          // Compare decimal strings exactly, as with the existing Approx.
+          // quantity grammar. Neither the pieces nor weights supply quantity.
+          const [lower, lowerFraction = ""] = pieces[2].split(".");
+          const [upper, upperFraction = ""] = pieces[3].split(".");
+          const precision = Math.max(
+            lowerFraction.length,
+            upperFraction.length,
+          );
+          return lower.length !== upper.length
+            ? lower.length < upper.length
+            : lower !== upper
+              ? lower < upper
+              : lowerFraction.padEnd(precision, "0") <
+                upperFraction.padEnd(precision, "0");
+        };
         const packageDescriptor = (value: string): boolean => {
-          if (packageSize.test(value)) return true;
+          if (packageSize.test(value) || pieceDescriptor(value)) return true;
           const tablets = /^Pack of ([1-9]\d*), ([1-9]\d*) Tablets$/.exec(
             value,
           );
@@ -1124,7 +1147,9 @@ async function readNowDom(
               const declaration = nextField(separator + 1);
               const units = fieldText(children[declaration]);
               if (
-                fieldText(children[separator]) === "." &&
+                (fieldText(children[separator]) === "." ||
+                  (pieceDescriptor(part) &&
+                    fieldText(children[separator]) === "·")) &&
                 purchasedUnits.test(units) &&
                 [node, children[separator], children[declaration]].every(
                   boundedPackageField,
@@ -1132,7 +1157,7 @@ async function readNowDom(
               ) {
                 if (split.length) return abort();
                 split.push(node, children[separator], children[declaration]);
-                // Discard only this proven adjacent package/period pair. Keep
+                // Discard only this proven adjacent package/separator pair. Keep
                 // the purchased declaration unchanged for the strict parser.
                 parts.push(units);
                 index = declaration;
@@ -1175,6 +1200,7 @@ async function readNowDom(
               const raw = el.textContent?.replace(/\s+/g, " ").trim() ?? "";
               return (
                 (/^pack\b/i.test(raw) ||
+                  piecePackageSignal.test(raw) ||
                   /^[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*[a-z]+$/i.test(raw) ||
                   (split.length &&
                     (quantitySignal.test(raw) || /^[.·•|:;/]+$/.test(raw)))) &&

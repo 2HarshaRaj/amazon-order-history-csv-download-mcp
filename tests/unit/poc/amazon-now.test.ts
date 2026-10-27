@@ -40,6 +40,12 @@ function fixture(): NowSnapshot {
 
 describe("Amazon Now fact validation (no Chromium)", () => {
   test.each([
+    ["3 Pcs (Approx. 61.5–93.25 g)", ".", "1 unit"],
+    ["3 Pcs (Approx. 61.5–93.25 g)", "·", "1 unit"],
+    ["7 Pcs (105-165 g)", ".", "1 unit"],
+    ["7 Pcs (105-165 g)", "·", "1 unit"],
+    ["3 Pcs (Approx. 61.5–93.25 g) . 1 unit"],
+    ["7 Pcs (105-165 g) · 1 unit"],
     ["Pack of 1, 60 Tablets", ".", "1 unit"],
     ["Pack of 2, 120 Tablets", ".", "2 units"],
     ["Pack of 1, 60 Tablets"],
@@ -62,14 +68,18 @@ describe("Amazon Now fact validation (no Chromium)", () => {
       expect(() => parseNowSnapshot(facts, id)).toThrow();
     },
   );
-  test.each(["Invented. name . 400 g", ".", "400 g", "Pack of 1, 60 Tablets"])(
-    "preserves the exact sole product-name field: %s",
-    (name) => {
-      const facts = fixture();
-      facts.items[0].parts[0] = name;
-      expect(parseNowSnapshot(facts, id).items[0].productName).toBe(name);
-    },
-  );
+  test.each([
+    "Invented. name . 400 g",
+    ".",
+    "400 g",
+    "Pack of 1, 60 Tablets",
+    "3 Pcs (Approx. 61.5–93.25 g)",
+    "7 Pcs (105-165 g)",
+  ])("preserves the exact sole product-name field: %s", (name) => {
+    const facts = fixture();
+    facts.items[0].parts[0] = name;
+    expect(parseNowSnapshot(facts, id).items[0].productName).toBe(name);
+  });
 
   test.each([id, `#${id}`, `# ${id}`])(
     "normalizes only the optional display hash",

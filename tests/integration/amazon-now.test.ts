@@ -42,6 +42,159 @@ const tabletOrder = readFileSync(
   join(__dirname, "fixtures/amazon-now-tablets.html"),
   "utf8",
 );
+const pieceOrder = readFileSync(
+  join(__dirname, "fixtures/amazon-now-pieces.html"),
+  "utf8",
+);
+const pieceApprox = "3 Pcs (Approx. 61.5–93.25 g)";
+const piecePlain = "7 Pcs (105-165 g)";
+const pieceFields = (
+  descriptor: string,
+  separator: string,
+  units = "1 unit",
+): string =>
+  `<span class="package-size">${descriptor}</span><span class="package-separator">${separator}</span><div class="quantity">${units}</div>`;
+const pieceCases: Array<[string, string]> = [];
+for (const [label, descriptor, separator, qualifier] of [
+  ["approximate", pieceApprox, ".", "Approx. "],
+  ["plain", piecePlain, "·", ""],
+]) {
+  const fields = pieceFields(descriptor, separator);
+  const badDescriptors = [
+    ...["0", "-1", "01", "1.5", "9007199254740992"].map(
+      (count) => `${count} Pcs (${qualifier}61-93 g)`,
+    ),
+    ...[
+      "0-93",
+      "-1-93",
+      "93-61",
+      "61-61",
+      "61.50-61.5",
+      "61-0",
+      "61--93",
+      "01-93",
+      "1e1-93",
+      "61—93",
+      "61/93",
+      "61..93",
+      "61-NaN",
+    ].map((range) => `3 Pcs (${qualifier}${range} g)`),
+    `3 Pcs (${qualifier}61-93 kg)`,
+    `3 Pieces (${qualifier}61-93 g)`,
+    `3 pcs (${qualifier}61-93 g)`,
+    `Box 3 Pcs (${qualifier}61-93 g)`,
+    `3 Pcs (${qualifier}61-93 g) extra`,
+    "3 Pcs (Approx 61-93 g)",
+  ];
+  for (const bad of badDescriptors)
+    pieceCases.push([
+      `${label} bad descriptor ${bad}`,
+      pieceOrder.replace(descriptor, bad),
+    ]);
+  const fieldVariants: Array<[string, string]> = [
+    ["missing separator", `<span>${descriptor}</span><div>1 unit</div>`],
+    ...["•", "|", ":", "..", "··", "．"].map((sep): [string, string] => [
+      "wrong separator " + sep,
+      pieceFields(descriptor, sep),
+    ]),
+    [
+      "duplicate separator",
+      fields.replace("</span><div", "</span><span>.</span><div"),
+    ],
+    [
+      "reordered separator",
+      `<span>${separator}</span><span>${descriptor}</span><div>1 unit</div>`,
+    ],
+    [
+      "different parents",
+      `<div><span>${descriptor}</span><span>${separator}</span></div><div>1 unit</div>`,
+    ],
+    [
+      "nonadjacent fields",
+      fields.replace(
+        '</span><span class="package-separator"',
+        '</span><span>Unrelated text</span><span class="package-separator"',
+      ),
+    ],
+    [
+      "hidden intervening field",
+      fields.replace(
+        '</span><span class="package-separator"',
+        '</span><span hidden>Unrelated text</span><span class="package-separator"',
+      ),
+    ],
+    [
+      "missing quantity",
+      fields.replace('<div class="quantity">1 unit</div>', ""),
+    ],
+    ["duplicate quantity", fields + "<div>Quantity: 2</div>"],
+    ["duplicate descriptor", `<span>${descriptor}</span>` + fields],
+    ["extra name", "<span>Another invented name</span>" + fields],
+    ["hidden conflicting count", fields + "<span hidden>Qty: 2</span>"],
+    [
+      "hidden conflicting descriptor",
+      fields + `<span hidden>${descriptor}</span>`,
+    ],
+    ["historical conflicting descriptor", fields + `<s>${descriptor}</s>`],
+    [
+      "hidden missing piece count",
+      fields + "<span hidden>Pcs (61-93 g)</span>",
+    ],
+    [
+      "hidden fragmented metadata pair",
+      `<span hidden><b>3</b><i>Pcs</i><span>(61-93 g)</span></span><span hidden>${separator}</span><div>1 unit</div>`,
+    ],
+    [
+      "hidden malformed descriptor",
+      fields + "<span hidden>0 Pcs (93-61 g)</span>",
+    ],
+    ["historical malformed descriptor", fields + "<s>0 Pcs (93-61 g)</s>"],
+    [
+      "hidden metadata pair",
+      `<span hidden>${descriptor}</span><span hidden>${separator}</span><div>1 unit</div>`,
+    ],
+    [
+      "historical metadata pair",
+      `<s>${descriptor}</s><s>${separator}</s><div>1 unit</div>`,
+    ],
+    [
+      "product link in descriptor",
+      fields.replace(descriptor, `${descriptor}<a href="/dp/B0PIEC0099"></a>`),
+    ],
+    [
+      "control in descriptor",
+      fields.replace(descriptor, `${descriptor}<button>Choice</button>`),
+    ],
+    [
+      "hidden descendant",
+      fields.replace(descriptor, `${descriptor}<span hidden>Other</span>`),
+    ],
+    [
+      "merchandise boundary in descriptor",
+      fields.replace(descriptor, `${descriptor}<span role="listitem"></span>`),
+    ],
+    ...["0 units", "2 units", "9007199254740992 units", "Qty: nope"].map(
+      (count): [string, string] => [
+        "invalid/incomplete quantity " + count,
+        pieceFields(descriptor, separator, count),
+      ],
+    ),
+    ...[
+      "hidden",
+      'aria-hidden="true"',
+      'style="opacity:0"',
+      'style="text-decoration:line-through"',
+    ].map((attr): [string, string] => [
+      "noncurrent metadata " + attr,
+      fields.replace('class="package-size"', `class="package-size" ${attr}`),
+    ]),
+  ];
+  for (const [name, replacement] of fieldVariants)
+    pieceCases.push([
+      `${label} ${name}`,
+      pieceOrder.replace(fields, replacement),
+    ]);
+}
 const tabletDescriptor = "Pack of 1, 60 Tablets";
 const tabletFields = `<span class="package-size">${tabletDescriptor}</span><span class="package-separator">.</span><div class="quantity">1 unit</div>`;
 const tabletCases: [string, string][] = [
@@ -953,6 +1106,187 @@ browserTests("integrated Amazon Now extraction", () => {
       /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
       replacement,
     );
+
+  test("piece packaging fixture exports all five exact names, purchased quantities and independent totals", async () => {
+    html = pieceOrder;
+    listHtml = list.replace("230.00", "81.00");
+    const detail = await extract();
+    const names = [
+      "Invented piece-fixture item 01",
+      "Invented piece-fixture item 02",
+      "Invented piece-fixture item 03",
+      "Invented. piece bundle 04",
+      "Invented piece bundle 05",
+    ];
+    expect(detail.items.map((item) => item.productName)).toEqual(names);
+    expect(detail.items.map((item) => item.quantity)).toEqual([1, 1, 1, 1, 1]);
+    expect(detail.items.map((item) => item.asin)).toEqual([
+      "B0PIEC0001",
+      "B0PIEC0002",
+      "",
+      "B0PIEC0004",
+      "B0PIEC0005",
+    ]);
+    expect(detail.items.map((item) => item.unitPrice.amount)).toEqual([
+      8, 12, 16, 20, 24,
+    ]);
+    expect(detail.items.map((item) => item.itemTotal.amount)).toEqual([
+      8, 12, 16, 20, 24,
+    ]);
+    expect(detail.adjustments.map((entry) => entry.amount?.amount)).toEqual([
+      3, -2,
+    ]);
+    expect(detail).toMatchObject({
+      itemCount: 5,
+      orderTotal: { amount: 81 },
+      orderTotalSource: "amazon-now-you-pay",
+      extractionSource: "amazon-now-order-details",
+    });
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(join(tmpdir(), "now-pieces-complete-"));
+    const output = join(directory, "orders.json");
+    try {
+      await runExport({ ...options, output }, () => {}, {
+        list: listOrders,
+        extract: extractOrderItems,
+        write: validateAndWriteExport,
+        report: async () => {},
+        cleanup: async () => {},
+      });
+      const saved = JSON.parse(await readFile(output, "utf8"));
+      expect(saved.orders).toHaveLength(1);
+      expect(
+        saved.orders[0].items.map(
+          (item: { productName: string }) => item.productName,
+        ),
+      ).toEqual(names);
+      expect(
+        saved.orders[0].items.map(
+          (item: { lineIndex: number }) => item.lineIndex,
+        ),
+      ).toEqual([0, 1, 2, 3, 4]);
+      expect(saved.orders[0].orderTotal).toBe(81);
+      expect(
+        saved.orders[0].items.every(
+          (item: { extractionSource: string }) =>
+            item.extractionSource === "amazon-now-order-details",
+        ),
+      ).toBe(true);
+      expect(await readdir(directory)).toEqual(["orders.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    ["3 Pcs (Approx. 61-93 g)", "."],
+    ["3 Pcs (Approx. 61–93 g)", "·"],
+    ["3 Pcs (61-93 g)", "."],
+    ["3 Pcs (61–93 g)", "·"],
+    [
+      "9007199254740991 Pcs (Approx. 0.1000000000000000001–0.1000000000000000002 g)",
+      ".",
+    ],
+    ["3 Pcs (61.500 - 61.501 g)", "·"],
+  ])(
+    "piece packaging keeps purchased count for %s with %s",
+    async (descriptor, separator) => {
+      html = pieceOrder.replace(
+        pieceFields(pieceApprox, "."),
+        pieceFields(descriptor, separator),
+      );
+      expect((await extract()).items[3]).toMatchObject({
+        productName: "Invented. piece bundle 04",
+        quantity: 1,
+        unitPrice: { amount: 20 },
+        itemTotal: { amount: 20 },
+      });
+    },
+  );
+
+  test("piece packaging uses independently declared unit and line prices for multiple purchased units", async () => {
+    html = pieceOrder.replace(
+      pieceFields(piecePlain, "·"),
+      pieceFields(piecePlain, "·", "2 units"),
+    );
+    html += `<script>document.querySelector('#pieces-row-5 .price').innerHTML = '<div>Unit price: <span>₹</span><span>12.00</span></div><div>Line total: <span>₹</span><span>24.00</span></div>';</script>`;
+    expect((await extract()).items[4]).toMatchObject({
+      productName: "Invented piece bundle 05",
+      quantity: 2,
+      unitPrice: { amount: 12 },
+      itemTotal: { amount: 24 },
+    });
+  });
+
+  test.each([
+    [
+      "missing product name",
+      pieceOrder.replace("Invented. piece bundle 04", ""),
+    ],
+    [
+      "descriptor-shaped ambiguous name",
+      pieceOrder.replace("Invented. piece bundle 04", pieceApprox),
+    ],
+    [
+      "unowned product image",
+      pieceOrder.replace(
+        "<h1>",
+        '<img alt="B0PIEC0099" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><h1>',
+      ),
+    ],
+    [
+      "missing price",
+      pieceOrder +
+        `<script>document.querySelector('#pieces-row-5 .price').remove();</script>`,
+    ],
+    [
+      "conflicting identifier",
+      pieceOrder +
+        `<script>document.querySelector('#pieces-row-5').insertAdjacentHTML('beforeend', '<a href="/dp/B0PIEC0099"></a>');</script>`,
+    ],
+    [
+      "invalid financial evidence",
+      pieceOrder.replace("You pay ₹81.00", "You pay ₹81.02"),
+    ],
+    ...pieceCases,
+  ])(
+    "piece packaging invalid %s preserves prior JSON",
+    async (_name, fixture) => {
+      expect(fixture).not.toBe(pieceOrder);
+      html = fixture;
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-pieces-atomic-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toMatchObject({ category: "validation" });
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Invented|B0PIEC|Pcs|₹|81\.00|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("tablet pack fixture exports eight exact products, adjustments and independent billed total atomically", async () => {
     html = tabletOrder;
