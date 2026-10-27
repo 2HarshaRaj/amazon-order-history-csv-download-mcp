@@ -260,45 +260,54 @@ Duplicate same-order cards, including across scanned pages, must agree on their
 date, status, and monetary facts (`LIST_DUPLICATE_CONFLICT`); later cards cannot
 silently overwrite earlier observations.
 
-**Wallet Add Money classification remains blocked on owner-local structural
-evidence (Issue #20).** No wallet exclusion is enabled. A complete visible
-`Amazon Pay Wallet Add Money` label on a selected card produces only a diagnostic
-hint; even an invented explicit funding-only declaration is not proof of a real
-Amazon transaction type. Product titles and payment-method wording cannot
-authorize exclusion. Unverified records retain normal selection, cap accounting,
-pagination, deduplication, identity and detail validation. A detail failure is
-never converted into a skip; an unsupported record can still stop the entire
-export without changing any previously published JSON.
+**Verified Amazon Pay Wallet funding cards are excluded before merchandise
+selection (Issue #20).** The owner-confirmed proof is one exact current `h3`
+`Amazon Pay Wallet` and one exact current `span` `Money added`. Their third parent
+must be the same inner `div`, inside the same order card, with distinct `a-row`
+branches. Both fields must be unique; hidden, historical or differently owned
+copies make the evidence uncertain.
 
-The bounded read-only observer reuses the existing order-card boundary and adds
-no wallet-specific selector. It records only these allowlisted events:
+The bounded block must contain exactly two agreeing Amazon.in `/dp/` links: one
+single-image link and one title link. These links are permitted wallet-card
+structure, not proof by themselves. Absence of `purchasedItems` alone is also
+insufficient. Purchased-item regions (including hidden copies), payment widgets,
+additional product/image/quantity/price evidence, unsupported block text,
+conflicting identities and cancellation/refund markers prevent classification.
+The current card must have one complete matching order ID; existing date parsing
+and any declared header-total validation remain required. The classifier makes
+no request to wallet/detail pages and adds no wallet financial export.
 
-- `LIST_WALLET_LABEL_UNVERIFIED`: one complete current label field; no
-  funding-only classification.
-- `LIST_WALLET_LABEL_AMBIGUOUS`: two or more label fields (count saturates at 2).
-- `LIST_WALLET_EVIDENCE_UNAVAILABLE`: bounded observation unavailable; transport
-  failures retain their safe category without exception messages.
+Unknown or ambiguous records retain normal strict selection and extraction.
+Products mentioning Amazon Pay Wallet and genuine purchases paid with wallet
+balance are not excluded by payment wording or product title. A detail failure
+never authorizes a skip. Unsupported layouts can still stop the entire export
+without changing prior JSON; no live compatibility beyond the confirmed pattern
+is claimed by offline fixtures.
 
-These additions contain only fixed codes, label counts and existing selected
-zero-based order indexes/timing metadata. Counts are **not** excluded-transaction
-counts. Hidden, accessibility-hidden, transparent and historical text cannot
-supply a visible hint. No DOM snapshots, labels, balances, IDs, amounts, paths or
-URLs are added by this observer; existing private failure-report handling stays
-unchanged. Observations never replace the original extraction failure reason.
+Excluded funding records consume no merchandise slots or indexes. Funding-only
+pages continue pagination, and funding dates cannot trigger the merchandise date
+cutoff. The existing 50-order cap and 20-page bound remain. New cards beyond an
+already full merchandise cap retain the existing non-validation behavior; known
+duplicates remain checked across scanned pages. Funding IDs are counted once; conflicting classification, dates or declared header facts
+fail closed, including across pages. No funding identity, amount or type flag is
+added to public JSON. Independent merchandise totals and one-paise reconciliation
+are unchanged.
 
-Before a skip can be enabled, owner-local evidence must establish a unique
-bounded transaction-type field on the same selected card, its generic exact
-wording/role and stable structural ownership, and an independently explicit
-funding-only indication distinct from a product title or payment method. It must
-also establish current merchandise/conflict guards and show the contrasting
-structure of a genuine purchase paid using Amazon Pay. Missing merchandise alone
-is insufficient proof: an incompletely loaded purchase must not disappear.
-Only masked tag/role/stable-attribute structure, field meanings, uniqueness and
-visibility counts are needed for review, including hidden/stale/conflicting
-variants. Do not share raw customer HTML, screenshots, IDs, prices, URLs,
-balances or credentials. No wallet-page scraping or further live test is
-authorized by these diagnostics. Issue #20 remains open; the safe exclusion and
-non-consumption of merchandise slots require that evidence and a later change.
+`LIST_WALLET_FUNDING_EXCLUDED` records the cumulative unique excluded-card count
+across scanned pages, with no merchandise order index or funding facts. Existing
+`LIST_WALLET_LABEL_UNVERIFIED`, `LIST_WALLET_LABEL_AMBIGUOUS` and
+`LIST_WALLET_EVIDENCE_UNAVAILABLE` remain diagnostic-only hints and never authorize
+exclusion; in particular the former assumed combined `Amazon Pay Wallet Add
+Money` field is not classification proof. Observation errors retain safe codes
+without exception messages. No raw labels, DOM snapshots, balances, IDs, amounts,
+paths or URLs are added by wallet events; existing private report handling is
+unchanged.
+
+Issue #20 remains open for independent inspection of this correction. Any further
+owner-local evidence should contain only masked tag/role/stable-attribute
+structure, field meanings and uniqueness/visibility counts; do not share personal
+HTML, screenshots, IDs, prices, URLs, balances or credentials. Another isolated
+live validation, synchronization, merge or deployment needs separate approval.
 
 Confirmed unpriced cancellations retain the existing constrained null-money
 representation only when the list has no total, cancellation is independently

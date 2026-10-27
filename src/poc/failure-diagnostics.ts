@@ -92,6 +92,7 @@ const reasonCodeSchema = z.enum([
   "LIST_WALLET_LABEL_UNVERIFIED",
   "LIST_WALLET_LABEL_AMBIGUOUS",
   "LIST_WALLET_EVIDENCE_UNAVAILABLE",
+  "LIST_WALLET_FUNDING_EXCLUDED",
   "DATE_RANGE_UNSUPPORTED",
   "DETAIL_NAVIGATION_FAILED",
   "DETAIL_SELECTOR_MISSING",
@@ -619,6 +620,12 @@ export class FailureDiagnostics {
   noteFailure(stage: FailureStage, reason: ReasonCode, error: unknown): void {
     this.note(stage, reason);
     this.events[this.events.length - 1].category = category(error, false);
+  }
+  walletFundingExcluded(count: number): void {
+    if (!Number.isSafeInteger(count) || count < 1) return;
+    this.note("list", "LIST_WALLET_FUNDING_EXCLUDED", count);
+    // Excluded funding records have no merchandise-order index or facts.
+    this.events[this.events.length - 1].orderIndex = undefined;
   }
   browserVersion(version: string | undefined): void {
     if (version && /^\d+(?:\.\d+){1,3}$/.test(version))

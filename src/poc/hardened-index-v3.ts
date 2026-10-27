@@ -17,6 +17,7 @@ import { DiagnosticError, FailureDiagnostics } from "./failure-diagnostics";
 import { extractDetailOrderTotal, extractHeaderOrderTotal } from "./order-total";
 import { discoverNowLink, extractNowOrder } from "./amazon-now";
 import { recordWalletCardDiagnostic } from "./wallet-card-diagnostics";
+import { classifyWalletFundingCard } from "./wallet-card-classification";
 
 const REGION = "in";
 const DOMAIN = "amazon.in";
@@ -353,12 +354,15 @@ function directHeader(orderId: string): OrderHeader {
   };
 }
 
+type ListedCardKind = { funding: boolean; date: number; amount?: number };
+
 interface OrderPageSelection {
   startKey: number;
   endKey: number;
   orderOffset: number;
   maxOrders: number;
   previousOrders?: MinimalOrder[];
+  cardKinds?: Map<string, ListedCardKind>;
 }
 
 function assertMatchingListedFacts(
@@ -385,12 +389,22 @@ export async function parseCurrentOrderPage(
   diagnostics?: FailureDiagnostics,
   selection?: OrderPageSelection,
 ): Promise<MinimalOrder[]> {
+  return (await readCurrentOrderPage(targetPage, diagnostics, selection)).orders;
+}
+
+async function readCurrentOrderPage(
+  targetPage: Page,
+  diagnostics?: FailureDiagnostics,
+  selection?: OrderPageSelection,
+): Promise<{ orders: MinimalOrder[]; dates: number[] }> {
   const cards = targetPage.locator(ORDER_CARD_SELECTOR);
   const count = await cards.count();
   const dedupe = new Map<string, MinimalOrder>();
   const known = new Map(selection?.previousOrders?.map((order) => [order.orderId, order]));
   const selectedIndexes = new Map(selection?.previousOrders?.map((order, index) => [order.orderId, index]));
   const previousCount = selectedIndexes.size;
+  const cardKinds = selection?.cardKinds ?? new Map<string, ListedCardKind>();
+  const dates: number[] = [];
 
   for (let i = 0; i < count; i++) {
     const card = cards.nth(i);
@@ -401,6 +415,43 @@ export async function parseCurrentOrderPage(
     const orderId = parseOrderIdFromText(text);
     const orderDateKey = parseOrderDateFromText(text);
     if (!orderId || orderDateKey === null) continue;
+    const candidateIndex = selectedIndexes.get(orderId) ??
+      ((selection?.orderOffset ?? 0) + selectedIndexes.size - previousCount);
+    const inspectKind = !selection || candidateIndex < selection.maxOrders ||
+      selectedIndexes.has(orderId) || cardKinds.has(orderId);
+    const wallet = inspectKind
+      ? await classifyWalletFundingCard(card, text, orderId, ORDER_CARD_SELECTOR)
+      : "not-observed";
+    const funding = wallet === "funding-only";
+    const fundingTotal = funding ? await extractHeaderOrderTotal(card) : undefined;
+    const fundingAmount = fundingTotal === undefined
+      ? undefined : Math.round(fundingTotal.amount * 100);
+    const previousKind = cardKinds.get(orderId);
+    if (
+      (previousKind && (
+        previousKind.funding !== funding ||
+        (funding && (
+          previousKind.date !== orderDateKey ||
+          previousKind.amount !== fundingAmount
+        ))
+      )) ||
+      (funding && known.has(orderId))
+    ) {
+      throw new DiagnosticError(
+        "list", "LIST_DUPLICATE_CONFLICT",
+        "Duplicate order cards have conflicting facts or classification.",
+      );
+    }
+    if (inspectKind) cardKinds.set(orderId, { funding, date: orderDateKey, amount: fundingAmount });
+    dates.push(orderDateKey);
+    if (funding) {
+      if (!previousKind) {
+        diagnostics?.walletFundingExcluded(
+          [...cardKinds.values()].filter(kind => kind.funding).length,
+        );
+      }
+      continue;
+    }
 
     // Fully cancelled legacy cards omit totals and data-component item markup,
     // but retain paired image/title product links.
@@ -425,6 +476,8 @@ export async function parseCurrentOrderPage(
     if (selected) {
       selectedIndexes.set(orderId, orderIndex);
       diagnostics?.select(order, orderIndex);
+      if (wallet === "unverified") diagnostics?.note("list", "LIST_WALLET_LABEL_UNVERIFIED");
+      if (wallet === "unavailable") diagnostics?.note("list", "LIST_WALLET_EVIDENCE_UNAVAILABLE");
       await recordWalletCardDiagnostic(card, text, ORDER_CARD_SELECTOR, diagnostics);
       diagnostics?.at("list", "LIST_TOTAL_READ_FAILED");
       order.nowDetailUrl = await discoverNowLink(card, targetPage.url(), orderId);
@@ -442,7 +495,7 @@ export async function parseCurrentOrderPage(
     if (!dedupe.has(orderId)) dedupe.set(orderId, previous ?? order);
   }
 
-  return [...dedupe.values()];
+  return { orders: [...dedupe.values()], dates };
 }
 
 async function getNextPageUrl(targetPage: Page): Promise<string | null> {
@@ -483,6 +536,7 @@ export async function listOrders(
     `https://www.${DOMAIN}/your-orders/orders?timeFilter=year-${year}&language=en_GB`;
   const matches: MinimalOrder[] = [];
   let pagesScanned = 0;
+  const cardKinds = new Map<string, ListedCardKind>();
 
   while (url && pagesScanned < MAX_PAGES && matches.length < maxOrders) {
     diagnostics?.at("list", "LIST_NAVIGATION_FAILED");
@@ -496,16 +550,18 @@ export async function listOrders(
     diagnostics?.at("list", "LIST_FACTS_MISSING");
 
     diagnostics?.listed(matches, pagesScanned + 1);
-    const pageOrders = await parseCurrentOrderPage(targetPage, diagnostics, {
+    const parsed = await readCurrentOrderPage(targetPage, diagnostics, {
       startKey,
       endKey,
       orderOffset: matches.length,
       maxOrders,
       previousOrders: matches,
+      cardKinds,
     });
+    const pageOrders = parsed.orders;
     pagesScanned += 1;
 
-    if (pageOrders.length === 0) {
+    if (parsed.dates.length === 0) {
       throw new DiagnosticError(
         "list",
         "LIST_FACTS_MISSING",
