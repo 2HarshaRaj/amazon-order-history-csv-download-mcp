@@ -354,6 +354,31 @@ These additions contain only fixed codes, elapsed time and the selected order
 index, without adding IDs, amounts, product text, URLs or page content. They do
 not change extraction acceptance rules or capture partial snapshots as evidence.
 
+Inside `parseNowSnapshot`, item-facts rejections add one fixed event before the
+unchanged terminal `items/ITEM_FACTS_INVALID` failure:
+
+| Event reason | Rejected item facts |
+| --- | --- |
+| `NOW_PARSE_QUANTITY_MISSING` | No quantity-signal field. |
+| `NOW_PARSE_QUANTITY_DUPLICATE` | Multiple quantity-signal fields, even if identical. |
+| `NOW_PARSE_QUANTITY_INVALID` | The sole quantity field fails the existing explicit grammar, range or positive safe-integer check. |
+| `NOW_PARSE_NAME_MISSING` | No product-name field, or a blank sole name. |
+| `NOW_PARSE_NAME_DUPLICATE` | Multiple product-name candidates. |
+| `NOW_PARSE_IDENTIFIERS_CONFLICT` | Validated image/link identifiers disagree. |
+
+The event includes only fixed stage/reason, elapsed time, the selected order
+index when available, and `lineIndex`: the zero-based snapshot item index bounded
+to 0–99. The existing report-level `lineIndex` also identifies that failing row;
+no partial item facts are captured. Attribution follows the original validation
+order and stops at the first rejected row/condition. A quantity-signal field
+means the existing conservative recognizer matched, not that its grammar is
+valid. Earlier DOM ownership or snapshot-shape failures retain their own codes
+without inventing a parser item index. Price and reconciliation failures retain
+their existing reasons. These events contain no raw text, identifiers, monetary
+values, URLs, selectors, DOM or exception messages. Parser acceptance, wallet
+classification, merchandise selection, export JSON and atomic publication are
+unchanged.
+
 Merchandise ownership rejections use the following fixed subreasons. The generic
 `NOW_ITEM_OWNERSHIP_INVALID` remains allowlisted as a compatibility fallback;
 every current ownership abort site has a specific attribution.

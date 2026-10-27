@@ -55,6 +55,14 @@ export const NOW_CHECKPOINTS = [
   "NOW_ITEMS_FEES",
   "NOW_PARSING",
 ] as const;
+export const NOW_PARSER_FAILURES = [
+  "NOW_PARSE_QUANTITY_MISSING",
+  "NOW_PARSE_QUANTITY_DUPLICATE",
+  "NOW_PARSE_QUANTITY_INVALID",
+  "NOW_PARSE_NAME_MISSING",
+  "NOW_PARSE_NAME_DUPLICATE",
+  "NOW_PARSE_IDENTIFIERS_CONFLICT",
+] as const;
 export const NOW_OWNERSHIP_FAILURES = [
   "NOW_NON_ITEM_REGION_INVALID",
   "NOW_ITEM_QUANTITY_MISSING",
@@ -103,6 +111,7 @@ const reasonCodeSchema = z.enum([
   "DETAIL_TOTAL_READ_FAILED",
   "NOW_EXTRACTION_FAILED",
   ...NOW_CHECKPOINTS,
+  ...NOW_PARSER_FAILURES,
   ...NOW_DOM_FAILURES,
   "LIST_DETAIL_TOTAL_DIFFER",
   "ADJUSTMENT_READ_FAILED",
@@ -191,6 +200,7 @@ interface DiagnosticEvent {
   reason: ReasonCode;
   elapsedMs: number;
   orderIndex?: number;
+  lineIndex?: number;
   count?: number;
   strategyIndex?: number;
   category?: FailureReport["failure"]["category"];
@@ -450,6 +460,7 @@ const failureReportSchema: z.ZodType<FailureReport> = z
             reason: reasonCodeSchema,
             elapsedMs: countSchema,
             orderIndex: orderIndexSchema.optional(),
+            lineIndex: countSchema.max(99).optional(),
             count: countSchema.optional(),
             strategyIndex: countSchema.max(5).optional(),
             category: categorySchema.optional(),
@@ -620,6 +631,21 @@ export class FailureDiagnostics {
   noteFailure(stage: FailureStage, reason: ReasonCode, error: unknown): void {
     this.note(stage, reason);
     this.events[this.events.length - 1].category = category(error, false);
+  }
+  nowParserFailure(
+    reason: (typeof NOW_PARSER_FAILURES)[number],
+    lineIndex: number,
+  ): void {
+    if (
+      !NOW_PARSER_FAILURES.includes(reason) ||
+      !Number.isSafeInteger(lineIndex) ||
+      lineIndex < 0 ||
+      lineIndex > 99
+    )
+      return;
+    this.item(lineIndex);
+    this.note("items", reason);
+    this.events[this.events.length - 1].lineIndex = lineIndex;
   }
   walletFundingExcluded(count: number): void {
     if (!Number.isSafeInteger(count) || count < 1) return;

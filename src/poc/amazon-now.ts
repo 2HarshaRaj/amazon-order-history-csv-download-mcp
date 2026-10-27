@@ -6,6 +6,7 @@ import {
   FailureDiagnostics,
   NOW_CHECKPOINTS,
   NOW_DOM_FAILURES,
+  NOW_PARSER_FAILURES,
 } from "./failure-diagnostics";
 import { parseHeaderTotalText } from "./order-total";
 import type { OrderAdjustment } from "./hardened-index-v3";
@@ -168,7 +169,7 @@ export function normalizeNowDisplayedId(value: string): string {
   return normalized;
 }
 
-function explicitQuantity(value: string): number {
+function explicitQuantity(value: string, invalid: () => never): number {
   const match = QUANTITY_FIELD.exec(value);
   const approximate = APPROX_QUANTITY_FIELD.exec(value);
   if (approximate) {
@@ -184,13 +185,12 @@ function explicitQuantity(value: string): number {
           ? lower < upper
           : lowerFraction.padEnd(precision, "0") <
             upperFraction.padEnd(precision, "0");
-    if (!increasing) fail("ITEM_FACTS_INVALID");
+    if (!increasing) invalid();
   }
   const count = match?.[1] ?? match?.[2] ?? approximate?.[3];
-  if (!count || !/^[1-9]\d*$/.test(count)) fail("ITEM_FACTS_INVALID");
+  if (!count || !/^[1-9]\d*$/.test(count)) invalid();
   const quantity = Number(count);
-  if (!Number.isSafeInteger(quantity) || quantity < 1)
-    fail("ITEM_FACTS_INVALID");
+  if (!Number.isSafeInteger(quantity) || quantity < 1) invalid();
   return quantity;
 }
 
@@ -198,6 +198,7 @@ function explicitQuantity(value: string): number {
 export function parseNowSnapshot(
   input: unknown,
   orderId: string,
+  trace?: FailureDiagnostics,
 ): NowOrderDetail {
   const result = snapshotSchema.safeParse(input);
   if (!result.success) fail("ITEM_SHAPE_AMBIGUOUS");
@@ -256,15 +257,31 @@ export function parseNowSnapshot(
   }
   if (!orderTotal) fail("DETAIL_TOTAL_INVALID");
   const seen = new Set<string>();
-  const items = facts.items.map(({ parts, alts, hrefs }) => {
+  const items = facts.items.map(({ parts, alts, hrefs }, lineIndex) => {
+    const invalid = (reason: (typeof NOW_PARSER_FAILURES)[number]): never => {
+      trace?.nowParserFailure(reason, lineIndex);
+      return fail("ITEM_FACTS_INVALID");
+    };
     const quantities = parts.filter((part) => QUANTITY_SIGNAL.test(part));
-    if (quantities.length !== 1) fail("ITEM_FACTS_INVALID");
-    const quantity = explicitQuantity(quantities[0]);
+    if (quantities.length !== 1)
+      invalid(
+        quantities.length === 0
+          ? "NOW_PARSE_QUANTITY_MISSING"
+          : "NOW_PARSE_QUANTITY_DUPLICATE",
+      );
+    const quantity = explicitQuantity(quantities[0], () =>
+      invalid("NOW_PARSE_QUANTITY_INVALID"),
+    );
     const prices = parts.filter((part) => /₹|\bINR\b/i.test(part));
     const names = parts.filter(
       (part) => !quantities.includes(part) && !prices.includes(part),
     );
-    if (names.length !== 1 || !names[0].trim()) fail("ITEM_FACTS_INVALID");
+    if (names.length !== 1 || !names[0].trim())
+      invalid(
+        names.length > 1
+          ? "NOW_PARSE_NAME_DUPLICATE"
+          : "NOW_PARSE_NAME_MISSING",
+      );
     let unitPrice: ReturnType<typeof money>;
     let itemTotal: ReturnType<typeof money>;
     if (quantity === 1 && prices.length === 1) {
@@ -299,7 +316,7 @@ export function parseNowSnapshot(
         );
       if (match) identifiers.add(match[1]);
     }
-    if (identifiers.size > 1) fail("ITEM_FACTS_INVALID");
+    if (identifiers.size > 1) invalid("NOW_PARSE_IDENTIFIERS_CONFLICT");
     const asin = identifiers.values().next().value ?? "";
     const productName = names[0];
     const key = `${asin}:${productName}`;
@@ -1330,7 +1347,7 @@ export async function extractNowOrder(
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
     at("NOW_PARSING");
-    return parseNowSnapshot(facts, orderId);
+    return parseNowSnapshot(facts, orderId, trace);
   } catch (error) {
     // A sign-in redirect after the click must preserve manual-authentication
     // lifecycle behavior, including leaving the dedicated window open.

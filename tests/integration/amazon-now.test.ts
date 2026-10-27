@@ -2154,6 +2154,139 @@ browserTests("integrated Amazon Now extraction", () => {
     10000,
   );
 
+  test.each([
+    ["invalid quantity", "NOW_PARSE_QUANTITY_INVALID"],
+    ["missing name", "NOW_PARSE_NAME_MISSING"],
+    ["duplicate name", "NOW_PARSE_NAME_DUPLICATE"],
+    ["conflicting identifiers", "NOW_PARSE_IDENTIFIERS_CONFLICT"],
+  ])(
+    "parser attribution for %s retains terminal reason and atomic output",
+    async (mode, reason) => {
+      // Mutate only the fifth row of the invented 23-item fixture. Earlier rows
+      // remain valid, proving the index is the rejected snapshot row, not zero.
+      html += `<script>
+      const row = document.querySelectorAll('.fixture-item')[4];
+      const mode = ${JSON.stringify(mode)};
+      if (mode === 'invalid quantity') row.querySelector('div').querySelector('div').textContent = 'Qty: 0';
+      if (mode === 'missing name') row.querySelector('div > span').remove();
+      if (mode === 'duplicate name') {
+        const name = document.createElement('span');
+        name.textContent = 'PRIVATE_EXTRA_NAME';
+        row.querySelector('div').prepend(name);
+      }
+      if (mode === 'conflicting identifiers') {
+        const link = document.createElement('a');
+        link.href = '/dp/B0DIAG0002';
+        row.append(link);
+      }
+    </script>`;
+      const trace = new FailureDiagnostics();
+      trace.select({ orderId: "not supplied", orderDate: "not supplied" }, 2);
+      trace.provenance("amazon-now-order-details");
+      const error = await extract(trace).catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        stage: "items",
+        reason: "ITEM_FACTS_INVALID",
+      });
+      const report = trace.report(error);
+      expect(report).toMatchObject({
+        lineIndex: 4,
+        counts: { items: 0, adjustments: 0 },
+        truncated: false,
+      });
+      expect(report.events.slice(-3)).toMatchObject([
+        { reason: "NOW_PARSING" },
+        { stage: "items", reason, lineIndex: 4, orderIndex: 2 },
+        {
+          stage: "items",
+          reason: "ITEM_FACTS_INVALID",
+          category: "validation",
+        },
+      ]);
+      const directory = await mkdtemp(join(tmpdir(), "now-parser-pipeline-"));
+      const output = join(directory, "orders.json");
+      const reports = join(directory, "reports");
+      try {
+        await writeFailureReport(report, join(directory, "sanitized"));
+        const names = await readdir(join(directory, "sanitized"));
+        const saved = await readFile(
+          join(directory, "sanitized", names[0]),
+          "utf8",
+        );
+        expect(JSON.parse(saved).lineIndex).toBe(4);
+        expect(saved + String(error)).not.toMatch(
+          /PRIVATE_|Invented|111-|B0TEST|B0DIAG|₹|10\.00|https?:|<html>|Qty:/,
+        );
+        await writeFile(output, "prior complete export");
+        jest
+          .spyOn(chromium, "launchPersistentContext")
+          .mockResolvedValue(context);
+        const logs: string[] = [];
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: (failure) => writeFailureReport(failure, reports),
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toMatchObject({
+          stage: "items",
+          reason: "ITEM_FACTS_INVALID",
+        });
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect((await readdir(directory)).sort()).toEqual([
+          "orders.json",
+          "reports",
+          "sanitized",
+        ]);
+        const persisted = JSON.parse(
+          await readFile(join(reports, (await readdir(reports))[0]), "utf8"),
+        );
+        expect(persisted).toMatchObject({
+          failure: { reason: "ITEM_FACTS_INVALID" },
+          lineIndex: 4,
+          counts: { items: 0 },
+        });
+        expect(persisted.events).toContainEqual(
+          expect.objectContaining({ reason, lineIndex: 4, orderIndex: 0 }),
+        );
+        expect(JSON.stringify(persisted.events) + logs.join(" ")).not.toMatch(
+          /PRIVATE_|Invented|111-|B0TEST|B0DIAG|₹|10\.00|https?:|<html>|Qty:/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["missing", "duplicate"])(
+    "%s DOM quantity remains an earlier ownership rejection",
+    async (mode) => {
+      html += `<script>
+      const quantity = document.querySelectorAll('.fixture-item')[4].querySelector('div').querySelector('div');
+      if (${JSON.stringify(mode)} === 'missing') quantity.remove();
+      else quantity.insertAdjacentHTML('afterend', '<div>Quantity: 2</div>');
+    </script>`;
+      const trace = new FailureDiagnostics();
+      const error = await extract(trace).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(Error);
+      expect(trace.report(error).failure.reason).not.toBe("ITEM_FACTS_INVALID");
+      expect(
+        trace
+          .report(error)
+          .events.some((event) => event.reason.startsWith("NOW_PARSE_")),
+      ).toBe(false);
+      expect(trace.report(error).lineIndex).toBeUndefined();
+    },
+  );
+
   test("integrated exporter persists the categorical checkpoint and preserves prior JSON", async () => {
     html = html.replace(
       "<h2>Bill summary</h2>",
