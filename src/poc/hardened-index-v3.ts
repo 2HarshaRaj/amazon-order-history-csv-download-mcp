@@ -16,6 +16,7 @@ import { OrderHeader } from "../core/types/order";
 import { DiagnosticError, FailureDiagnostics } from "./failure-diagnostics";
 import { extractDetailOrderTotal, extractHeaderOrderTotal } from "./order-total";
 import { discoverNowLink, extractNowOrder } from "./amazon-now";
+import { recordWalletCardDiagnostic } from "./wallet-card-diagnostics";
 
 const REGION = "in";
 const DOMAIN = "amazon.in";
@@ -424,6 +425,7 @@ export async function parseCurrentOrderPage(
     if (selected) {
       selectedIndexes.set(orderId, orderIndex);
       diagnostics?.select(order, orderIndex);
+      await recordWalletCardDiagnostic(card, text, ORDER_CARD_SELECTOR, diagnostics);
       diagnostics?.at("list", "LIST_TOTAL_READ_FAILED");
       order.nowDetailUrl = await discoverNowLink(card, targetPage.url(), orderId);
       const total = await extractHeaderOrderTotal(card);

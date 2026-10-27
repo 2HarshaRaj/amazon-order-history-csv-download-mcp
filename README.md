@@ -260,6 +260,46 @@ Duplicate same-order cards, including across scanned pages, must agree on their
 date, status, and monetary facts (`LIST_DUPLICATE_CONFLICT`); later cards cannot
 silently overwrite earlier observations.
 
+**Wallet Add Money classification remains blocked on owner-local structural
+evidence (Issue #20).** No wallet exclusion is enabled. A complete visible
+`Amazon Pay Wallet Add Money` label on a selected card produces only a diagnostic
+hint; even an invented explicit funding-only declaration is not proof of a real
+Amazon transaction type. Product titles and payment-method wording cannot
+authorize exclusion. Unverified records retain normal selection, cap accounting,
+pagination, deduplication, identity and detail validation. A detail failure is
+never converted into a skip; an unsupported record can still stop the entire
+export without changing any previously published JSON.
+
+The bounded read-only observer reuses the existing order-card boundary and adds
+no wallet-specific selector. It records only these allowlisted events:
+
+- `LIST_WALLET_LABEL_UNVERIFIED`: one complete current label field; no
+  funding-only classification.
+- `LIST_WALLET_LABEL_AMBIGUOUS`: two or more label fields (count saturates at 2).
+- `LIST_WALLET_EVIDENCE_UNAVAILABLE`: bounded observation unavailable; transport
+  failures retain their safe category without exception messages.
+
+These additions contain only fixed codes, label counts and existing selected
+zero-based order indexes/timing metadata. Counts are **not** excluded-transaction
+counts. Hidden, accessibility-hidden, transparent and historical text cannot
+supply a visible hint. No DOM snapshots, labels, balances, IDs, amounts, paths or
+URLs are added by this observer; existing private failure-report handling stays
+unchanged. Observations never replace the original extraction failure reason.
+
+Before a skip can be enabled, owner-local evidence must establish a unique
+bounded transaction-type field on the same selected card, its generic exact
+wording/role and stable structural ownership, and an independently explicit
+funding-only indication distinct from a product title or payment method. It must
+also establish current merchandise/conflict guards and show the contrasting
+structure of a genuine purchase paid using Amazon Pay. Missing merchandise alone
+is insufficient proof: an incompletely loaded purchase must not disappear.
+Only masked tag/role/stable-attribute structure, field meanings, uniqueness and
+visibility counts are needed for review, including hidden/stale/conflicting
+variants. Do not share raw customer HTML, screenshots, IDs, prices, URLs,
+balances or credentials. No wallet-page scraping or further live test is
+authorized by these diagnostics. Issue #20 remains open; the safe exclusion and
+non-consumption of merchandise slots require that evidence and a later change.
+
 Confirmed unpriced cancellations retain the existing constrained null-money
 representation only when the list has no total, cancellation is independently
 confirmed on Order Details, cancelled list items exist, no adjustments exist, and
