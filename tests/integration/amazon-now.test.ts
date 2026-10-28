@@ -195,6 +195,192 @@ for (const [label, descriptor, separator, qualifier] of [
       pieceOrder.replace(fields, replacement),
     ]);
 }
+const gramOrder = readFileSync(
+  join(__dirname, "fixtures/amazon-now-gram-multipack.html"),
+  "utf8",
+);
+const gramDescriptor = "Pack of 6, 0.75 g Each";
+const gramFields = pieceFields(gramDescriptor, ".");
+const gramCases: Array<[string, string]> = [
+  ...[
+    ...["0", "-1", "+2", "01", "1.5", "1e2", "9007199254740992", ""].map(
+      (count) => `Pack of ${count}, 0.75 g Each`,
+    ),
+    ...[
+      "0",
+      "0.00",
+      "-1",
+      "+1",
+      "01",
+      "00.75",
+      ".75",
+      "1.",
+      "1e2",
+      "NaN",
+      "Infinity",
+      "9007199254740991",
+      "9007199254740992",
+      "9".repeat(310),
+      "0." + "0".repeat(340) + "1",
+    ].map((grams) => `Pack of 6, ${grams} g Each`),
+    ...[
+      "kg Each",
+      "mg Each",
+      "grams Each",
+      "G Each",
+      "g each",
+      "g EACH",
+      "g Each extra",
+      "g",
+    ].map((unit) => `Pack of 6, 0.75 ${unit}`),
+    "Pack of 6, 1." + "0".repeat(500) + "1 g Each",
+    "pack of 6, 0.75 g Each",
+    "Pack of 6; 0.75 g Each",
+    "Pack of 6， 0.75 g Each",
+    "Pack of 6,0.75 g Each",
+    "Pack of 6 0.75 g Each",
+    "Box of 6, 0.75 g Each",
+  ].map((value): [string, string] => [
+    "malformed descriptor " + value,
+    gramOrder.replace(gramDescriptor, value),
+  ]),
+  ...(
+    [
+      ["missing separator", `<span>${gramDescriptor}</span><div>1 unit</div>`],
+      ...["·", "•", "|", ":", "..", "．"].map((separator): [string, string] => [
+        "unsupported separator " + separator,
+        pieceFields(gramDescriptor, separator),
+      ]),
+      [
+        "duplicate separator",
+        gramFields.replace("</span><div", "</span><span>.</span><div"),
+      ],
+      [
+        "misplaced period",
+        `<span>.</span><span>${gramDescriptor}</span><div>1 unit</div>`,
+      ],
+      [
+        "different parents",
+        `<div><span>${gramDescriptor}</span><span>.</span></div><div>1 unit</div>`,
+      ],
+      [
+        "nonadjacent visible field",
+        gramFields.replace(
+          '</span><span class="package-separator"',
+          '</span><span>Unrelated</span><span class="package-separator"',
+        ),
+      ],
+      [
+        "nonadjacent hidden field",
+        gramFields.replace(
+          '</span><span class="package-separator"',
+          '</span><span hidden>Unrelated</span><span class="package-separator"',
+        ),
+      ],
+      [
+        "missing purchased declaration",
+        gramFields.replace('<div class="quantity">1 unit</div>', ""),
+      ],
+      ["duplicate purchased declaration", gramFields + "<div>Qty: 1</div>"],
+      ["duplicate metadata", `<span>${gramDescriptor}</span>` + gramFields],
+      ["extra product name", "<span>Another invented name</span>" + gramFields],
+      [
+        "hidden metadata pair",
+        `<span hidden>${gramDescriptor}</span><span hidden>.</span><div>1 unit</div>`,
+      ],
+      [
+        "historical metadata pair",
+        `<s>${gramDescriptor}</s><s>.</s><div>1 unit</div>`,
+      ],
+      [
+        "hidden conflicting descriptor",
+        gramFields + `<span hidden>${gramDescriptor}</span>`,
+      ],
+      [
+        "historical conflicting descriptor",
+        gramFields + `<s>${gramDescriptor}</s>`,
+      ],
+      [
+        "hidden malformed descriptor",
+        gramFields + "<span hidden>Pack of 0, 0 g Each</span>",
+      ],
+      ["hidden quantity conflict", gramFields + "<span hidden>Qty: 2</span>"],
+      [
+        "nested product link",
+        gramFields.replace(
+          gramDescriptor,
+          gramDescriptor + '<a href="/dp/B0GRAM0099"></a>',
+        ),
+      ],
+      [
+        "nested control",
+        gramFields.replace(
+          gramDescriptor,
+          gramDescriptor + "<button>Choice</button>",
+        ),
+      ],
+      [
+        "hidden metadata child",
+        gramFields.replace(
+          gramDescriptor,
+          gramDescriptor + "<span hidden>Other</span>",
+        ),
+      ],
+      [
+        "nested merchandise boundary",
+        gramFields.replace(
+          gramDescriptor,
+          gramDescriptor + '<span role="listitem"></span>',
+        ),
+      ],
+      ...[
+        "hidden",
+        'aria-hidden="true"',
+        'style="opacity:0"',
+        'style="text-decoration:line-through"',
+      ].map((attribute): [string, string] => [
+        "noncurrent metadata " + attribute,
+        gramFields.replace(
+          'class="package-size"',
+          'class="package-size" ' + attribute,
+        ),
+      ]),
+      ...["0 units", "Qty: nope", "9007199254740992 units", "2 units"].map(
+        (quantity): [string, string] => [
+          "invalid or incomplete quantity " + quantity,
+          pieceFields(gramDescriptor, ".", quantity),
+        ],
+      ),
+    ] as Array<[string, string]>
+  ).map(([name, fields]): [string, string] => [
+    name,
+    gramOrder.replace(gramFields, fields),
+  ]),
+  ["missing name", gramOrder.replace("Invented. gram-pack item 10", "")],
+  [
+    "descriptor-shaped name",
+    gramOrder.replace("Invented. gram-pack item 10", gramDescriptor),
+  ],
+  [
+    "missing price",
+    gramOrder +
+      `<script>document.querySelector('#grams-row-10 .price').remove();</script>`,
+  ],
+  [
+    "ambiguous price",
+    gramOrder +
+      `<script>document.querySelector('#grams-row-10 .price').insertAdjacentHTML('beforeend', '<span>₹12.00</span>');</script>`,
+  ],
+  [
+    "identifier conflict",
+    gramOrder +
+      `<script>document.querySelector('#grams-row-10').insertAdjacentHTML('beforeend', '<a href="/dp/B0GRAM0099"></a>');</script>`,
+  ],
+  [
+    "billed total conflict",
+    gramOrder.replace("You pay ₹76.00", "You pay ₹76.02"),
+  ],
+];
 const tabletDescriptor = "Pack of 1, 60 Tablets";
 const tabletFields = `<span class="package-size">${tabletDescriptor}</span><span class="package-separator">.</span><div class="quantity">1 unit</div>`;
 const tabletCases: [string, string][] = [
@@ -1106,6 +1292,136 @@ browserTests("integrated Amazon Now extraction", () => {
       /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
       replacement,
     );
+
+  test("gram multipack fixture preserves all ten items, exact names, quantities, provenance and atomic output", async () => {
+    html = gramOrder;
+    listHtml = list.replace("230.00", "76.00");
+    const detail = await extract();
+    const names = Array.from({ length: 10 }, (_, i) =>
+      i === 9
+        ? "Invented. gram-pack item 10"
+        : `Invented gram-pack item ${String(i + 1).padStart(2, "0")}`,
+    );
+    const prices = Array.from({ length: 10 }, (_, i) => i + 3);
+    expect(detail.items.map((item) => item.productName)).toEqual(names);
+    expect(detail.items.map((item) => item.quantity)).toEqual(
+      Array(10).fill(1),
+    );
+    expect(detail.items.map((item) => item.asin)).toEqual(
+      Array.from({ length: 10 }, (_, i) =>
+        i === 2 ? "" : `B0GRAM${String(i + 1).padStart(4, "0")}`,
+      ),
+    );
+    expect(detail.items.map((item) => item.unitPrice.amount)).toEqual(prices);
+    expect(detail.items.map((item) => item.itemTotal.amount)).toEqual(prices);
+    expect(detail.adjustments.map((item) => item.amount?.amount)).toEqual([
+      4, -3,
+    ]);
+    expect(detail).toMatchObject({
+      itemCount: 10,
+      orderTotal: { amount: 76 },
+      orderTotalSource: "amazon-now-you-pay",
+      extractionSource: "amazon-now-order-details",
+    });
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(join(tmpdir(), "now-grams-complete-"));
+    const output = join(directory, "orders.json");
+    try {
+      await runExport({ ...options, output }, () => {}, {
+        list: listOrders,
+        extract: extractOrderItems,
+        write: validateAndWriteExport,
+        report: async () => {},
+        cleanup: async () => {},
+      });
+      const saved = JSON.parse(await readFile(output, "utf8"));
+      expect(saved.orders).toHaveLength(1);
+      expect(
+        saved.orders[0].items.map(
+          (item: { productName: string }) => item.productName,
+        ),
+      ).toEqual(names);
+      expect(
+        saved.orders[0].items.map(
+          (item: { lineIndex: number }) => item.lineIndex,
+        ),
+      ).toEqual(Array.from({ length: 10 }, (_, i) => i));
+      expect(saved.orders[0].orderTotal).toBe(76);
+      expect(await readdir(directory)).toEqual(["orders.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  test.each([
+    "Pack of 4, 3 g Each",
+    "Pack of 9007199254740991, 0.125 g Each",
+    "Pack of 1, 1.50 g Each",
+    "Pack of 2, 9007199254740990 g Each",
+  ])(
+    "gram multipack metadata never supplies quantity: %s",
+    async (descriptor) => {
+      html = gramOrder.replace(gramDescriptor, descriptor);
+      expect((await extract()).items[9]).toMatchObject({
+        productName: "Invented. gram-pack item 10",
+        quantity: 1,
+        unitPrice: { amount: 12 },
+        itemTotal: { amount: 12 },
+      });
+    },
+  );
+  test.each(["2 units", "Qty: 2", "Quantity: 2"])(
+    "gram multipack uses independent unit and line prices for %s",
+    async (quantity) => {
+      html = gramOrder.replace(
+        gramFields,
+        pieceFields(gramDescriptor, ".", quantity),
+      );
+      html += `<script>document.querySelector('#grams-row-10 .price').innerHTML = '<div>Unit price: <span>₹</span><span>6.00</span></div><div>Line total: <span>₹</span><span>12.00</span></div>';</script>`;
+      expect((await extract()).items[9]).toMatchObject({
+        quantity: 2,
+        unitPrice: { amount: 6 },
+        itemTotal: { amount: 12 },
+      });
+    },
+  );
+  test.each(gramCases)(
+    "gram multipack invalid %s preserves prior JSON",
+    async (_name, fixture) => {
+      expect(fixture).not.toBe(gramOrder);
+      html = fixture;
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-grams-atomic-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toMatchObject({ category: "validation" });
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Invented|B0GRAM|Pack of|₹|76\.00|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("piece packaging fixture exports all five exact names, purchased quantities and independent totals", async () => {
     html = pieceOrder;

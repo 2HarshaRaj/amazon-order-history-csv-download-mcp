@@ -183,6 +183,21 @@ unsupported. Hidden or historical pack evidence, including malformed/unsupported
 eight-item tablet fixture covers seven measurements plus this descriptor; the
 23-item fixtures retain their existing presentations.
 
+The same period-only sibling proof also supports exactly `Pack of N, M g Each`
+within the existing 500-character field bound.
+`N` is a positive canonical safe integer. `M` uses the existing positive decimal
+measurement syntax: no signs, leading zeros, exponent notation or unit changes;
+its numeric value must remain positive and below `Number.MAX_SAFE_INTEGER`
+(underflow and overflow are rejected). Fixed `Pack of`, ASCII comma, lowercase
+`g` and `Each` spelling are required after existing whitespace normalization.
+Neither pack count nor per-piece weight supplies purchased quantity. Only the
+separate explicit purchased-unit declaration does. The original name remains
+unchanged, and only an adjacent literal ASCII period is accepted; middle dots
+are not supported for this descriptor. Existing field-count, current visibility,
+ownership, hidden/historical Pack rejection, independent price and reconciliation
+checks apply. The invented ten-item fixture combines this descriptor with the
+previously supported package forms and tests atomic failure preservation.
+
 The same DOM-adjacent normalization also recognizes the case-sensitive piece
 packaging descriptors `N Pcs (Approx. X–Y g)` and `N Pcs (X–Y g)`. `N` must be a
 positive safe integer with canonical digit syntax. Both gram endpoints must be

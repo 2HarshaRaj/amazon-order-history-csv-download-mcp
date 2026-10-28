@@ -1078,6 +1078,20 @@ async function readNowDom(
         };
         const packageDescriptor = (value: string): boolean => {
           if (packageSize.test(value) || pieceDescriptor(value)) return true;
+          const grams =
+            value.length <= 500
+              ? /^Pack of ([1-9]\d*), ([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g Each$/.exec(
+                  value,
+                )
+              : null;
+          if (grams) {
+            const weight = Number(grams[2]);
+            return (
+              Number.isSafeInteger(Number(grams[1])) &&
+              weight > 0 &&
+              weight < Number.MAX_SAFE_INTEGER
+            );
+          }
           const tablets = /^Pack of ([1-9]\d*), ([1-9]\d*) Tablets$/.exec(
             value,
           );
