@@ -150,7 +150,7 @@ describe("Amazon Now fact validation (no Chromium)", () => {
     facts.items[0].parts[1] = part;
     expect(() => parseNowSnapshot(facts, id)).toThrow();
   });
-  test("two displayed units require unit and line evidence and never division", () => {
+  test("multi-line orders still require explicit unit and line evidence for two units", () => {
     const facts = fixture();
     facts.items[0].parts = [
       "Invented item",

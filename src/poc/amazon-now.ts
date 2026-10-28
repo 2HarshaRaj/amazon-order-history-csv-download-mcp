@@ -113,6 +113,7 @@ const snapshotSchema = z
   .object({
     orderIds: z.array(z.string().max(100)).length(1),
     billRows: z.array(z.string().min(1).max(200)).min(1).max(24),
+    singleLinePriceDomVerified: z.literal(true).optional(),
     items: z
       .array(
         z
@@ -209,6 +210,10 @@ export function parseNowSnapshot(
   )
     fail();
   let orderTotal: ReturnType<typeof money> | undefined;
+  let itemsTotal: ReturnType<typeof money> | undefined;
+  let subtotalDeclarations = 0;
+  const adjustmentKinds = new Set<string>();
+  let duplicateAdjustment = false;
   const adjustments: OrderAdjustment[] = [];
   const labels = new Set<string>();
   for (const row of facts.billRows) {
@@ -223,7 +228,9 @@ export function parseNowSnapshot(
       continue;
     }
     if (/^(?:items? total|items? subtotal|subtotal)$/i.test(label)) {
-      money(pair[2]); // Validate, but never promote a subtotal to billed total.
+      const subtotal = money(pair[2]); // Never promote a subtotal to billed total.
+      subtotalDeclarations++;
+      if (/^items total$/i.test(label)) itemsTotal = subtotal;
       continue;
     }
     // Only explicit additive fees and signed discounts are supported. Included,
@@ -234,6 +241,11 @@ export function parseNowSnapshot(
     if (discount && !/^-\s*(?:₹|INR\b)/i.test(pair[2]))
       fail("ADJUSTMENT_AMOUNT_INVALID");
     if (fee && /^-/.test(pair[2])) fail("ADJUSTMENT_AMOUNT_INVALID");
+    const kind =
+      fee?.[1].toLowerCase() ??
+      (/^discount/i.test(label) ? "discount" : "promotion");
+    if (adjustmentKinds.has(kind)) duplicateAdjustment = true;
+    adjustmentKinds.add(kind);
     const amount =
       /^free$/i.test(pair[2]) && fee
         ? { amount: 0, currency: "INR", formatted: "Free" }
@@ -288,6 +300,54 @@ export function parseNowSnapshot(
       unitPrice = itemTotal = money(
         prices[0].replace(/^(?:unit price|item total|line total)\s*:\s*/i, ""),
       );
+    } else if (
+      facts.singleLinePriceDomVerified === true &&
+      facts.items.length === 1 &&
+      quantity > 1 &&
+      prices.length === 1
+    ) {
+      if (
+        !itemsTotal ||
+        subtotalDeclarations !== 1 ||
+        adjustments.length ||
+        duplicateAdjustment
+      )
+        fail("ITEM_SHAPE_AMBIGUOUS");
+      // This exception accepts only canonical unlabelled INR values. Parse the
+      // declared decimal strings into exact paise before comparing or dividing.
+      const exactPaise = (value: string): number => {
+        const match =
+          /^(?:₹\s*|INR\s+)((?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d?(?:,\d{2})*,\d{3})(?:\.\d{1,2})?)$/.exec(
+            value,
+          );
+        if (!match) return fail("ITEM_SHAPE_AMBIGUOUS");
+        const [whole, fraction = ""] = match[1].replace(/,/g, "").split(".");
+        const paise = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0"));
+        if (paise <= 0n || paise > BigInt(Number.MAX_SAFE_INTEGER))
+          fail("ITEM_SHAPE_AMBIGUOUS");
+        return Number(paise);
+      };
+      const linePaise = exactPaise(prices[0]);
+      if (
+        linePaise !== exactPaise(itemsTotal.formatted) ||
+        linePaise !== exactPaise(orderTotal.formatted) ||
+        BigInt(linePaise) % BigInt(quantity) !== 0n
+      )
+        fail("ITEM_SHAPE_AMBIGUOUS");
+      const unitPaise = Number(BigInt(linePaise) / BigInt(quantity));
+      itemTotal = money(prices[0]);
+      if (
+        !Number.isSafeInteger(unitPaise) ||
+        unitPaise <= 0 ||
+        Math.round(itemTotal.amount * 100) !== linePaise ||
+        Math.round((unitPaise / 100) * 100) !== unitPaise
+      )
+        fail("ITEM_SHAPE_AMBIGUOUS");
+      unitPrice = {
+        amount: unitPaise / 100,
+        currency: "INR",
+        formatted: `Derived INR ${BigInt(unitPaise) / 100n}.${String(BigInt(unitPaise) % 100n).padStart(2, "0")}`,
+      };
     } else {
       const units = prices.filter((part) => /^unit price\s*:/i.test(part));
       const totals = prices.filter((part) =>
@@ -1248,7 +1308,131 @@ async function readNowDom(
               ),
           };
         });
-        return { orderIds, billRows, items };
+        const single = items.length === 1 ? items[0] : undefined;
+        const declaration = single?.parts.filter((part) =>
+          quantitySignal.test(part),
+        );
+        const declared = declaration?.length === 1 ? declaration[0] : "";
+        const quantityMatch = quantityField.exec(declared);
+        const count = Number(
+          quantityMatch?.[1] ??
+            quantityMatch?.[2] ??
+            approximateQuantityField.exec(declared)?.[3],
+        );
+        const prices =
+          single?.parts.filter((part) => /₹|\bINR\b/i.test(part)) ?? [];
+        const singleLinePriceDomVerified =
+          Number.isSafeInteger(count) &&
+          count > 1 &&
+          prices.length === 1 &&
+          /^(?:₹|INR\b)/.test(prices[0]);
+        if (singleLinePriceDomVerified) {
+          const row = [...itemRoots][0];
+          const merchandise = row.closest(rowBoundary) ?? row;
+          if (itemText(merchandise) !== itemText(row)) return abort();
+          // Incomplete semantic rows must not disappear merely because their
+          // image is presentational and quantity/price evidence is missing.
+          if (
+            nodes.some(
+              (el) =>
+                el.matches(rowBoundary) &&
+                !el.contains(row) &&
+                !nonItemRoots.some((region) => region.contains(el)),
+            )
+          )
+            return abort();
+          const raw = (el: Element): string =>
+            el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+          const historical = (el: Element): Element | undefined => {
+            let result: Element | undefined;
+            for (
+              let node: Element | null = el;
+              node && node !== root;
+              node = node.parentElement
+            )
+              if (
+                ["S", "DEL", "STRIKE"].includes(node.tagName) ||
+                view
+                  .getComputedStyle(node)
+                  .textDecorationLine.includes("line-through")
+              )
+                result = node;
+            return result;
+          };
+          const comparison = (el: Element): boolean => {
+            const old = historical(el);
+            const parent = old?.parentElement;
+            if (
+              !old ||
+              !parent ||
+              !rendered(old, true) ||
+              !/^(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i.test(raw(old)) ||
+              old.querySelector(`img, a, button, ${merchandiseBoundary}`)
+            )
+              return false;
+            // One visible historical price may be a comparison only inside the
+            // same minimal field/label-bound bill row as its current value.
+            const owner =
+              row.contains(parent) && itemText(parent) === prices[0];
+            const billOwner = billRegions.has(parent);
+            return (
+              (owner || billOwner) &&
+              elements(parent).filter(
+                (node) =>
+                  historical(node) === node && /₹|\bINR\b/i.test(raw(node)),
+              ).length === 1
+            );
+          };
+          for (const el of nodes) {
+            if (current(el)) continue;
+            const value = raw(el);
+            const inBill = billRoot.contains(el);
+            const nonItem = nonItemRoots.some(
+              (region) => region !== billRoot && region.contains(el),
+            );
+            if (
+              !inBill &&
+              (quantitySignal.test(value) ||
+                el.matches(`${rowBoundary}, ${productLink}`) ||
+                (el.tagName === "IMG" &&
+                  (!nonItem ||
+                    /^[A-Z0-9]{10}$/.test(el.getAttribute("alt") ?? "") ||
+                    el.closest(rowBoundary))))
+            )
+              return abort();
+            if (nonItem) continue;
+            if (
+              ((inBill || merchandise.contains(el)) &&
+                directText(el) &&
+                value) ||
+              /₹|\bINR\b/i.test(value)
+            ) {
+              // Existing proven, visually rendered aria-hidden price pairs are
+              // current evidence. Actual hiding and labelled historical facts
+              // cannot authorize the exception.
+              if (
+                !inBill &&
+                current(el, true) &&
+                (priceOverrides.has(el) ||
+                  priceAncestors.has(el) ||
+                  renderedPairs.some(
+                    (pair) =>
+                      pair.currency.contains(el) || pair.number.contains(el),
+                  ))
+              )
+                continue;
+              if (!comparison(el)) return abort();
+            }
+          }
+        }
+        return {
+          orderIds,
+          billRows,
+          items,
+          ...(singleLinePriceDomVerified
+            ? { singleLinePriceDomVerified: true as const }
+            : {}),
+        };
       };
       try {
         return { facts: read(), checkpoints };

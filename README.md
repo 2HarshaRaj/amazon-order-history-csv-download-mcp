@@ -234,9 +234,33 @@ total; the previous single-field presentations remain regression fixtures.
 
 Bill values come from individual label-bound rows, including `Inclusive of taxes`
 only as a subtitle of `You pay`; no flat sequence of unrelated tokens is paired.
-Quantity greater than one requires both labeled **Unit price** and **Item total**
-or **Line total** declarations; the exporter never divides a line amount to
-invent a unit price. Quantity declarations bind bounded merchandise rows with
+The normal multi-unit path requires both labeled **Unit price** and **Item total**
+or **Line total** declarations. One narrow exception supports exactly one current,
+independently owned merchandise row, quantity greater than one and exactly one
+unlabelled eligible current price. The DOM reader must supply an internal proof
+that hidden/historical rows, quantities, names or conflicting financial evidence
+have not disappeared. A single visible crossed-out amount is permitted only as
+a comparison in the same bounded current-price field or label-bound bill row;
+its value never enters calculations. Actual hiding, labelled historical prices
+and extra comparison candidates cannot supply this proof. Existing validated,
+visually rendered accessibility-hidden price pairs retain their treatment.
+
+For that exception only, exactly one independent **Items total** and one **You pay**
+must each equal the current line price **exactly in integer paise**. Other subtotal
+declarations, duplicate/ambiguous charge kinds, unknown charges and any nonzero
+fee/discount/promotion reject the exception, even if adjustments net to zero.
+The three totals must use canonical positive INR notation, represent safe integer
+paise and agree without the usual one-paise reconciliation tolerance. The line
+paise must divide exactly by the positive safe-integer purchased count, producing
+a positive whole-paise unit amount without rounding. `itemTotal` preserves the
+source line total; `unitPrice` is **mathematically derived from that independently
+verified line total**, not directly displayed by Amazon. The internal formatted
+unit value is marked `Derived INR`; no public JSON field or provenance enum is
+added. Multiple product lines, missing proof/totals, non-divisible totals and
+ambiguous prices retain strict rejection. Quantity-one pricing and the normal
+explicitly labelled multi-unit path retain their behavior.
+
+Quantity declarations bind bounded merchandise rows with
 product evidence. All remaining product links, images and current prices must
 belong to those rows. Separately named delivery/status/payment regions and
 explicitly presentational images do not become products; incomplete rows,

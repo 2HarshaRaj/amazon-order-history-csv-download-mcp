@@ -381,6 +381,295 @@ const gramCases: Array<[string, string]> = [
     gramOrder.replace("You pay ₹76.00", "You pay ₹76.02"),
   ],
 ];
+const singleLineOrder = readFileSync(
+  join(__dirname, "fixtures/amazon-now-single-line.html"),
+  "utf8",
+);
+const singleMutation = (script: string): string =>
+  singleLineOrder + `<script>${script}</script>`;
+const singleLineCases: Array<[string, string]> = [
+  ...["single-subtotal", "single-you-pay"].flatMap(
+    (id): Array<[string, string]> => [
+      [
+        "missing " + id,
+        singleMutation(`document.querySelector('#${id}').remove();`),
+      ],
+      [
+        "duplicate " + id,
+        singleMutation(
+          `const row=document.querySelector('#${id}'); row.after(row.cloneNode(true));`,
+        ),
+      ],
+      [
+        "hidden duplicate " + id,
+        singleMutation(
+          `const row=document.querySelector('#${id}'); const copy=row.cloneNode(true); copy.hidden=true; row.after(copy);`,
+        ),
+      ],
+      [
+        "historical duplicate " + id,
+        singleMutation(
+          `const row=document.querySelector('#${id}'); const copy=row.cloneNode(true); copy.style.textDecoration='line-through'; row.after(copy);`,
+        ),
+      ],
+      [
+        "hidden required " + id,
+        singleMutation(`document.querySelector('#${id}').hidden=true;`),
+      ],
+      [
+        "aria-hidden required " + id,
+        singleMutation(
+          `document.querySelector('#${id}').setAttribute('aria-hidden','true');`,
+        ),
+      ],
+      [
+        "one paise conflict " + id,
+        singleMutation(
+          `document.querySelector('#${id} span').textContent='₹18.51';`,
+        ),
+      ],
+      [
+        "hidden conflicting amount " + id,
+        singleMutation(
+          `document.querySelector('#${id}').insertAdjacentHTML('beforeend','<span hidden>₹99.00</span>');`,
+        ),
+      ],
+    ],
+  ),
+  ["subtotal alias", singleLineOrder.replace("Items total", "Items subtotal")],
+  [
+    "additional subtotal declaration",
+    singleMutation(
+      `document.querySelector('#single-bill').insertAdjacentHTML('beforeend','<div>Subtotal ₹18.50</div>');`,
+    ),
+  ],
+  [
+    "duplicate free fee aliases",
+    singleMutation(
+      `document.querySelector('#single-bill').insertAdjacentHTML('beforeend','<div>Handling charge Free</div>');`,
+    ),
+  ],
+  ...[
+    "Handling fee ₹1.00",
+    "Delivery fee ₹1.00",
+    "Shipping fee ₹1.00",
+    "Discount -₹1.00",
+    "Promotion -₹1.00",
+    "Unknown charge ₹0.00",
+    "Tax ₹0.00",
+  ].map((bill): [string, string] => [
+    "nonzero/unknown adjustment " + bill,
+    singleMutation(
+      `document.querySelector('#single-handling').remove(); document.querySelector('#single-delivery').remove(); document.querySelector('#single-bill').insertAdjacentHTML('beforeend',${JSON.stringify("<div>" + bill + "</div>")});`,
+    ),
+  ]),
+  [
+    "adjustments net to zero",
+    singleMutation(
+      `document.querySelector('#single-handling').innerHTML='Handling fee ₹1.00'; document.querySelector('#single-bill').insertAdjacentHTML('beforeend','<div>Discount -₹1.00</div>');`,
+    ),
+  ],
+  [
+    "hidden unknown charge",
+    singleMutation(
+      `document.querySelector('#single-bill').insertAdjacentHTML('beforeend','<div hidden>Unknown charge ₹1.00</div>');`,
+    ),
+  ],
+  [
+    "hidden discount",
+    singleMutation(
+      `document.querySelector('#single-bill').insertAdjacentHTML('beforeend','<div hidden>Discount -₹1.00</div>');`,
+    ),
+  ],
+  ...[
+    "₹18.51",
+    "₹0.01",
+    "₹0",
+    "₹-18.50",
+    "-₹18.50",
+    "₹018.50",
+    "₹18.500",
+    "₹1e2",
+    "₹+18.50",
+    "₹1,20.00",
+    "₹90071992547409.92",
+  ].map((value): [string, string] => [
+    "invalid/nondivisible price " + value,
+    singleLineOrder.replaceAll("₹18.50", value),
+  ]),
+  ...[
+    "0 units",
+    "-2 units",
+    "02 units",
+    "2.0 units",
+    "Qty: unknown",
+    "9007199254740992 units",
+    "9007199254740991 units",
+  ].map((value): [string, string] => [
+    "invalid/nondivisible quantity " + value,
+    singleLineOrder.replace("2 units", value),
+  ]),
+  [
+    "missing quantity",
+    singleMutation(`document.querySelector('#single-row .quantity').remove();`),
+  ],
+  [
+    "duplicate quantity",
+    singleMutation(
+      `document.querySelector('#single-row').insertAdjacentHTML('beforeend','<div>Qty: 2</div>');`,
+    ),
+  ],
+  [
+    "missing name",
+    singleMutation(`document.querySelector('#single-row h3').remove();`),
+  ],
+  [
+    "duplicate name",
+    singleMutation(
+      `document.querySelector('#single-row h3').insertAdjacentHTML('afterend','<h3>Second invented name</h3>');`,
+    ),
+  ],
+  [
+    "conflicting identifier",
+    singleMutation(
+      `document.querySelector('#single-row').insertAdjacentHTML('beforeend','<a href="/dp/B0SOLO0002"></a>');`,
+    ),
+  ],
+  [
+    "extra current price",
+    singleMutation(
+      `document.querySelector('#single-price').insertAdjacentHTML('beforeend','<span>₹9.25</span>');`,
+    ),
+  ],
+  [
+    "unowned current price",
+    singleMutation(
+      `document.querySelector('#single-items').insertAdjacentHTML('afterend','<span>₹18.50</span>');`,
+    ),
+  ],
+  [
+    "hidden current price",
+    singleMutation(`document.querySelector('#single-price span').hidden=true;`),
+  ],
+  [
+    "only historical prices",
+    singleMutation(
+      `document.querySelector('#single-price span').style.textDecoration='line-through';`,
+    ),
+  ],
+  [
+    "hidden conflicting price",
+    singleMutation(
+      `document.querySelector('#single-price').insertAdjacentHTML('beforeend','<span hidden>₹99.00</span>');`,
+    ),
+  ],
+  [
+    "historical labelled unit price",
+    singleMutation(
+      `document.querySelector('#single-price').insertAdjacentHTML('beforeend','<s>Unit price: ₹9.25</s>');`,
+    ),
+  ],
+  [
+    "extra historical reference",
+    singleMutation(
+      `document.querySelector('#single-price').insertAdjacentHTML('beforeend','<s>₹99.00</s>');`,
+    ),
+  ],
+  [
+    "unbounded historical price",
+    singleMutation(
+      `document.querySelector('#single-row').insertAdjacentHTML('beforeend','<s>₹99.00</s>');`,
+    ),
+  ],
+  [
+    "actually hidden reference",
+    singleMutation(`document.querySelector('#single-price s').hidden=true;`),
+  ],
+  [
+    "hidden quantity",
+    singleMutation(
+      `document.querySelector('#single-row').insertAdjacentHTML('beforeend','<span hidden>Qty: 2</span>');`,
+    ),
+  ],
+  [
+    "historical quantity",
+    singleMutation(
+      `document.querySelector('#single-row').insertAdjacentHTML('beforeend','<s>Qty: 2</s>');`,
+    ),
+  ],
+  [
+    "aria-hidden name",
+    singleMutation(
+      `document.querySelector('#single-row').insertAdjacentHTML('beforeend','<h3 aria-hidden="true">Hidden invented name</h3>');`,
+    ),
+  ],
+  [
+    "aria-hidden quantity",
+    singleMutation(
+      `document.querySelector('#single-row').insertAdjacentHTML('beforeend','<span aria-hidden="true">Qty: 2</span>');`,
+    ),
+  ],
+  [
+    "extra bill comparisons",
+    singleMutation(
+      `document.querySelector('#single-you-pay').insertAdjacentHTML('beforeend','<s>₹37.00</s><s>₹99.00</s>');`,
+    ),
+  ],
+  [
+    "hidden name",
+    singleMutation(
+      `document.querySelector('#single-row').insertAdjacentHTML('beforeend','<h3 hidden>Hidden invented name</h3>');`,
+    ),
+  ],
+  [
+    "hidden merchandise row",
+    singleMutation(
+      `const row=document.querySelector('#single-row'); const copy=row.cloneNode(true); copy.hidden=true; row.after(copy);`,
+    ),
+  ],
+  [
+    "historical merchandise row",
+    singleMutation(
+      `const row=document.querySelector('#single-row'); const copy=row.cloneNode(true); copy.style.textDecoration='line-through'; row.after(copy);`,
+    ),
+  ],
+  [
+    "hidden merchandise inside funding",
+    singleMutation(
+      `const copy=document.querySelector('#single-row').cloneNode(true); copy.hidden=true; document.querySelector('#single-funding').append(copy);`,
+    ),
+  ],
+  [
+    "hidden quantity inside funding",
+    singleMutation(
+      `document.querySelector('#single-funding').insertAdjacentHTML('beforeend','<span hidden>Qty: 2</span>');`,
+    ),
+  ],
+  [
+    "unowned semantic product name",
+    singleMutation(
+      `const row=document.querySelector('#single-row'); const inner=document.createElement('div'); while(row.firstChild) inner.append(row.firstChild); row.append(inner); row.insertAdjacentHTML('beforeend','<h3>Another invented name</h3>');`,
+    ),
+  ],
+  [
+    "hidden unowned semantic product name",
+    singleMutation(
+      `const row=document.querySelector('#single-row'); const inner=document.createElement('div'); while(row.firstChild) inner.append(row.firstChild); row.append(inner); row.insertAdjacentHTML('beforeend','<h3 hidden>Another invented name</h3>');`,
+    ),
+  ],
+  [
+    "incomplete semantic merchandise row",
+    singleMutation(
+      `document.querySelector('#single-items').insertAdjacentHTML('beforeend','<article role="listitem"><h3>Incomplete invented item</h3><img role="presentation" alt="Invented item image" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></article>');`,
+    ),
+  ],
+  [
+    "two current merchandise lines",
+    singleMutation(
+      `const row=document.querySelector('#single-row'); row.after(row.cloneNode(true)); document.querySelector('#single-subtotal span').textContent='₹37.00'; document.querySelector('#single-you-pay span').textContent='₹37.00';`,
+    ),
+  ],
+];
 const tabletDescriptor = "Pack of 1, 60 Tablets";
 const tabletFields = `<span class="package-size">${tabletDescriptor}</span><span class="package-separator">.</span><div class="quantity">1 unit</div>`;
 const tabletCases: [string, string][] = [
@@ -1292,6 +1581,180 @@ browserTests("integrated Amazon Now extraction", () => {
       /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
       replacement,
     );
+
+  test("verified single-line derivation publishes one product line with two units and exact derived price", async () => {
+    html = singleLineOrder;
+    listHtml = list.replace("230.00", "18.50");
+    const detail = await extract();
+    expect(detail).toMatchObject({
+      itemCount: 1,
+      orderTotal: { amount: 18.5 },
+      orderTotalSource: "amazon-now-you-pay",
+      extractionSource: "amazon-now-order-details",
+      adjustments: [],
+    });
+    expect(detail.items).toEqual([
+      {
+        productName: "Invented. single-line item",
+        asin: "B0SOLO0001",
+        quantity: 2,
+        itemTotal: { amount: 18.5, currency: "INR", formatted: "₹18.50" },
+        unitPrice: {
+          amount: 9.25,
+          currency: "INR",
+          formatted: "Derived INR 9.25",
+        },
+      },
+    ]);
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(join(tmpdir(), "now-single-complete-"));
+    const output = join(directory, "orders.json");
+    try {
+      await runExport({ ...options, output }, () => {}, {
+        list: listOrders,
+        extract: extractOrderItems,
+        write: validateAndWriteExport,
+        report: async () => {},
+        cleanup: async () => {},
+      });
+      const saved = JSON.parse(await readFile(output, "utf8"));
+      expect(saved.orders).toHaveLength(1);
+      expect(saved.orders[0].items).toHaveLength(1);
+      expect(saved.orders[0].items[0]).toMatchObject({
+        lineIndex: 0,
+        productName: "Invented. single-line item",
+        quantity: 2,
+        unitPrice: 9.25,
+        itemTotal: 18.5,
+      });
+      expect(saved.orders[0].orderTotal).toBe(18.5);
+      expect(JSON.stringify(saved)).not.toMatch(
+        /singleLinePriceDomVerified|Derived INR/,
+      );
+      expect(await readdir(directory)).toEqual(["orders.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  test.each([
+    [
+      "bill comparisons",
+      singleMutation(
+        `document.querySelector('#single-subtotal').insertAdjacentHTML('beforeend','<s>₹37.00</s>'); document.querySelector('#single-you-pay').insertAdjacentHTML('beforeend','<s>₹37.00</s>');`,
+      ),
+    ],
+    [
+      "wrapped merchandise content",
+      singleMutation(
+        `const row=document.querySelector('#single-row'); const inner=document.createElement('div'); while(row.firstChild) inner.append(row.firstChild); row.append(inner);`,
+      ),
+    ],
+    ["changed comparison", singleLineOrder.replace("₹37.00", "₹99.99")],
+    [
+      "DEL comparison",
+      singleLineOrder.replace("<s>₹37.00</s>", "<del>₹37.00</del>"),
+    ],
+    [
+      "CSS comparison",
+      singleLineOrder.replace(
+        "<s>₹37.00</s>",
+        '<span style="text-decoration:line-through">₹37.00</span>',
+      ),
+    ],
+    [
+      "accessibility-hidden adjacent price",
+      singleLineOrder.replace(
+        '<div id="single-price"><span>₹18.50</span>',
+        '<div id="single-price" aria-hidden="true"><span>₹</span><span>18.50</span>',
+      ),
+    ],
+    [
+      "visible adjacent price",
+      singleLineOrder.replace(
+        "<span>₹18.50</span><s>₹37.00",
+        "<span>₹</span><span>18.50</span><s>₹37.00",
+      ),
+    ],
+    [
+      "zero charged fee",
+      singleLineOrder.replace(
+        "Handling fee <span>Free</span>",
+        "Handling fee <span>₹0.00</span>",
+      ),
+    ],
+  ])("verified single-line derivation retains %s", async (_name, fixture) => {
+    html = fixture;
+    expect((await extract()).items[0]).toMatchObject({
+      quantity: 2,
+      unitPrice: { amount: 9.25 },
+      itemTotal: { amount: 18.5 },
+    });
+  });
+  test.each([
+    ["₹18.51", "3 units", 6.17],
+    ["INR 1,200.00", "2 units", 600],
+    ["₹0.06", "6 units", 0.01],
+  ])(
+    "verified single-line derivation divides %s by %s without rounding",
+    async (price, quantity, amount) => {
+      html = singleLineOrder
+        .replaceAll("₹18.50", price)
+        .replace("2 units", quantity);
+      expect((await extract()).items[0].unitPrice.amount).toBe(amount);
+    },
+  );
+  test.each(["quantity one", "labelled multi-unit"])(
+    "single-line normal path remains unchanged: %s",
+    async (mode) => {
+      html = singleLineOrder;
+      if (mode === "quantity one") html = html.replace("2 units", "1 unit");
+      else
+        html += `<script>document.querySelector('#single-price').innerHTML='<div>Unit price: ₹9.25</div><div>Line total: ₹18.50</div>';</script>`;
+      html += `<script>document.querySelector('#single-handling').innerHTML='Handling fee ₹1.00'; document.querySelector('#single-you-pay span').textContent='₹19.51';</script>`;
+      const detail = await extract();
+      expect(detail.items[0].unitPrice.formatted).not.toContain("Derived");
+      expect(detail.adjustments[0].amount?.amount).toBe(1);
+      expect(detail.orderTotal.amount).toBe(19.51);
+    },
+  );
+  test.each(singleLineCases)(
+    "verified single-line derivation rejects %s and preserves prior JSON",
+    async (_name, fixture) => {
+      expect(fixture).not.toBe(singleLineOrder);
+      html = fixture;
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-single-atomic-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toMatchObject({ category: "validation" });
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Invented|B0SOLO|₹|18\.50|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("gram multipack fixture preserves all ten items, exact names, quantities, provenance and atomic output", async () => {
     html = gramOrder;
