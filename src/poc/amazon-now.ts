@@ -1374,10 +1374,28 @@ async function readNowDom(
             // same minimal field/label-bound bill row as its current value.
             const owner =
               row.contains(parent) && itemText(parent) === prices[0];
-            const billOwner = billRegions.has(parent);
+            const billOwners = [...billRegions].filter((region) =>
+              region.contains(old),
+            );
+            if (billOwners.length > 1) return false;
+            let field: Element | undefined = owner ? parent : undefined;
+            // Bill comparisons may have layout wrappers. Only a unique,
+            // independently label-bound row within five parent steps may own
+            // one; billRoot membership alone never supplies ownership.
+            for (
+              let scope: Element | null = parent, depth = 0;
+              !field &&
+              billOwners.length === 1 &&
+              scope &&
+              scope !== billRoot &&
+              depth < 5;
+              scope = scope.parentElement, depth++
+            ) {
+              if (scope === billOwners[0]) field = scope;
+            }
             return (
-              (owner || billOwner) &&
-              elements(parent).filter(
+              !!field &&
+              elements(field).filter(
                 (node) =>
                   historical(node) === node && /₹|\bINR\b/i.test(raw(node)),
               ).length === 1

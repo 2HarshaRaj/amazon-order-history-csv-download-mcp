@@ -166,6 +166,27 @@ const negative: Array<[string, (f: NowSnapshot) => void]> = [
   ],
 ];
 describe("Amazon Now independently corroborated single-line unit derivation", () => {
+  test.each([
+    "Items total ₹18.50 ₹37.00",
+    "You pay ₹18.50 ₹37.00",
+    "Handling fee Free ₹3.00",
+    "₹37.00",
+    "Historical comparison ₹37.00",
+  ])(
+    "comparison values cannot enter normalized current bill facts: %s",
+    (row) => {
+      const f = fixture();
+      if (row.startsWith("Items total")) f.billRows[0] = row;
+      else if (row.startsWith("You pay")) f.billRows[3] = row;
+      else f.billRows.push(row);
+      expect(() => parseNowSnapshot(f, id)).toThrow();
+    },
+  );
+  test("an old comparison matching both bill totals cannot replace the current line", () => {
+    const f = fixture();
+    f.billRows = ["Items total ₹37.00", "You pay ₹37.00"];
+    expect(() => parseNowSnapshot(f, id)).toThrow();
+  });
   test("two units retain one line, exact name, original total and marked derived unit price", () => {
     const result = parseNowSnapshot(fixture(), id);
     expect(result).toMatchObject({

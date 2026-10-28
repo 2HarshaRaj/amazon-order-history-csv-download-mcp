@@ -387,6 +387,124 @@ const singleLineOrder = readFileSync(
 );
 const singleMutation = (script: string): string =>
   singleLineOrder + `<script>${script}</script>`;
+const nestedBillOrder = readFileSync(
+  join(__dirname, "fixtures/amazon-now-nested-bill-comparison.html"),
+  "utf8",
+);
+const nestedReference = (wrappers: number, value = "₹37.00"): string =>
+  "<div>".repeat(wrappers) +
+  `<p style="text-decoration:line-through">${value}</p>` +
+  "</div>".repeat(wrappers);
+const nestedInBill = (markup: string, row = "single-you-pay"): string =>
+  singleMutation(
+    `document.querySelector('#${row}').insertAdjacentHTML('beforeend',${JSON.stringify(markup)});`,
+  );
+const nestedBillCases: Array<[string, string]> = [
+  [
+    "no recognized row",
+    singleMutation(
+      `document.querySelector('#single-bill').insertAdjacentHTML('beforeend',${JSON.stringify(nestedReference(1))});`,
+    ),
+  ],
+  ["beyond five parent steps", nestedInBill(nestedReference(5))],
+  [
+    "two nested comparisons",
+    nestedInBill(nestedReference(1) + nestedReference(2, "₹49.00")),
+  ],
+  [
+    "nested and direct comparisons",
+    nestedInBill(nestedReference(1) + "<s>₹49.00</s>"),
+  ],
+  [
+    "nested overlapping bill rows",
+    nestedInBill("<div>Shipping fee Free" + nestedReference(1) + "</div>"),
+  ],
+  [
+    "multiple labels in owner",
+    nestedInBill("Discount -₹0.00" + nestedReference(1)),
+  ],
+  [
+    "shared bill container without row ownership",
+    singleMutation(
+      `const box=document.createElement('div'); const bill=document.querySelector('#single-bill'); box.append(document.querySelector('#single-subtotal'),document.querySelector('#single-you-pay')); box.insertAdjacentHTML('beforeend',${JSON.stringify(nestedReference(1))}); bill.append(box);`,
+    ),
+  ],
+  [
+    "hidden historical amount",
+    nestedInBill(nestedReference(1).replace("<p ", "<p hidden ")),
+  ],
+  [
+    "hidden comparison wrapper",
+    nestedInBill(nestedReference(1).replace("<div>", "<div hidden>")),
+  ],
+  [
+    "aria-hidden comparison wrapper",
+    nestedInBill(
+      nestedReference(1).replace("<div>", '<div aria-hidden="true">'),
+    ),
+  ],
+  [
+    "historical row instead of current owner",
+    singleMutation(
+      `const copy=document.querySelector('#single-you-pay').cloneNode(true); copy.style.textDecoration='line-through'; copy.insertAdjacentHTML('beforeend',${JSON.stringify(nestedReference(1))}); document.querySelector('#single-bill').append(copy);`,
+    ),
+  ],
+  [
+    "hidden conflicting financial fact",
+    nestedInBill(nestedReference(1) + "<span hidden>₹49.00</span>"),
+  ],
+  [
+    "unknown hidden bill token",
+    nestedInBill(nestedReference(1) + "<span hidden>Unknown charge</span>"),
+  ],
+  [
+    "unknown current bill token",
+    nestedInBill(nestedReference(1) + "<span>Unknown charge ₹1.00</span>"),
+  ],
+  [
+    "extra current amount",
+    nestedInBill(nestedReference(1) + "<span>₹49.00</span>"),
+  ],
+  [
+    "labelled historical charge",
+    nestedInBill(nestedReference(1, "Shipping fee ₹49.00")),
+  ],
+  [
+    "product descendant in historical amount",
+    nestedInBill(nestedReference(1, '₹37.00<a href="/dp/B0SOLO0099"></a>')),
+  ],
+  [
+    "control descendant in historical amount",
+    nestedInBill(nestedReference(1, "₹37.00<button></button>")),
+  ],
+  [
+    "unstruck reference",
+    nestedInBill(
+      nestedReference(1).replace('style="text-decoration:line-through"', ""),
+    ),
+  ],
+  ["malformed reference amount", nestedInBill(nestedReference(1, "₹37.001"))],
+  [
+    "one paise conflicting current total",
+    nestedInBill(nestedReference(1)) +
+      `<script>document.querySelector('#single-you-pay span').textContent='₹18.51';</script>`,
+  ],
+  [
+    "nonzero effective adjustment",
+    nestedInBill(nestedReference(1)) +
+      `<script>document.querySelector('#single-handling').innerHTML='Handling fee ₹1.00';</script>`,
+  ],
+  [
+    "nondivisible current line total",
+    nestedInBill(nestedReference(1)).replaceAll("₹18.50", "₹18.51"),
+  ],
+  [
+    "nested merchandise comparison without current-field ownership",
+    singleMutation(
+      `document.querySelector('#single-price s').remove(); document.querySelector('#single-price').insertAdjacentHTML('beforeend',${JSON.stringify(nestedReference(1))});`,
+    ),
+  ],
+];
 const singleLineCases: Array<[string, string]> = [
   ...["single-subtotal", "single-you-pay"].flatMap(
     (id): Array<[string, string]> => [
@@ -1581,6 +1699,118 @@ browserTests("integrated Amazon Now extraction", () => {
       /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
       replacement,
     );
+
+  test("nested bill comparison fixture retains exact one-line derivation and atomic publication", async () => {
+    html = nestedBillOrder;
+    const detail = await extract();
+    expect(detail).toMatchObject({
+      itemCount: 1,
+      orderTotalSource: "amazon-now-you-pay",
+      orderTotal: { amount: 18.5 },
+      adjustments: [],
+    });
+    expect(detail.items[0]).toMatchObject({
+      productName: "Invented. single-line item",
+      quantity: 2,
+      unitPrice: { amount: 9.25, formatted: "Derived INR 9.25" },
+      itemTotal: { amount: 18.5 },
+    });
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(
+      join(tmpdir(), "now-nested-bill-complete-"),
+    );
+    const output = join(directory, "orders.json");
+    try {
+      await runExport({ ...options, output }, () => {}, {
+        list: listOrders,
+        extract: extractOrderItems,
+        write: validateAndWriteExport,
+        report: async () => {},
+        cleanup: async () => {},
+      });
+      const saved = JSON.parse(await readFile(output, "utf8"));
+      expect(saved.orders[0].items).toHaveLength(1);
+      expect(saved.orders[0].items[0]).toMatchObject({
+        lineIndex: 0,
+        productName: "Invented. single-line item",
+        quantity: 2,
+        unitPrice: 9.25,
+        itemTotal: 18.5,
+      });
+      expect(saved.orders[0].orderTotal).toBe(18.5);
+      expect(await readdir(directory)).toEqual(["orders.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  test.each([
+    ["direct child", nestedInBill(nestedReference(0))],
+    ["five-parent boundary", nestedInBill(nestedReference(4))],
+    ["changed old amount", nestedInBill(nestedReference(2, "₹99.99"))],
+    [
+      "nested text inside historical paragraph",
+      nestedInBill(nestedReference(1, "<span>₹37.00</span>")),
+    ],
+    ["Items total owner", nestedInBill(nestedReference(2), "single-subtotal")],
+    [
+      "waived fee owner",
+      singleLineOrder.replace("<s>₹3.00</s>", nestedReference(1, "₹3.00")),
+    ],
+    [
+      "merchandise minimal current field",
+      singleLineOrder.replace(
+        "<span>₹18.50</span><s>₹37.00</s>",
+        '<div><span>₹18.50</span><p style="text-decoration:line-through">₹37.00</p></div>',
+      ),
+    ],
+  ])("nested bill comparison preserves %s", async (_name, fixture) => {
+    html = fixture;
+    expect((await extract()).items[0]).toMatchObject({
+      quantity: 2,
+      unitPrice: { amount: 9.25 },
+      itemTotal: { amount: 18.5 },
+    });
+  });
+  test.each(nestedBillCases)(
+    "nested bill comparison rejects %s and preserves prior JSON",
+    async (_name, fixture) => {
+      expect(fixture).not.toBe(singleLineOrder);
+      html = fixture;
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(
+        join(tmpdir(), "now-nested-bill-atomic-"),
+      );
+      const output = join(directory, "orders.json");
+      await writeFile(output, "prior complete export");
+      const logs: string[] = [];
+      try {
+        await expect(
+          runExport(
+            { ...options, output },
+            (message) => {
+              logs.push(message);
+            },
+            {
+              list: listOrders,
+              extract: extractOrderItems,
+              write: validateAndWriteExport,
+              report: async () => {},
+              cleanup: async () => {},
+            },
+          ),
+        ).rejects.toMatchObject({ category: "validation" });
+        expect(await readFile(output, "utf8")).toBe("prior complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(logs.join(" ")).not.toMatch(
+          /111-|Invented|B0SOLO|₹|18\.50|amazon\.in/,
+        );
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("verified single-line derivation publishes one product line with two units and exact derived price", async () => {
     html = singleLineOrder;

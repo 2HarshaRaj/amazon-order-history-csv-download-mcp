@@ -240,8 +240,14 @@ independently owned merchandise row, quantity greater than one and exactly one
 unlabelled eligible current price. The DOM reader must supply an internal proof
 that hidden/historical rows, quantities, names or conflicting financial evidence
 have not disappeared. A single visible crossed-out amount is permitted only as
-a comparison in the same bounded current-price field or label-bound bill row;
-its value never enters calculations. Actual hiding, labelled historical prices
+a comparison in the same bounded current-price field or exactly one independently
+label-bound bill-row ancestor. Bill comparisons may have layout wrappers, but the
+recognized row must be reached within five parent steps from the historical
+amount. General membership in Bill summary is insufficient. The entire owning
+row must contain exactly one historical comparison candidate, including across
+separate wrappers; existing current bill facts remain independently validated.
+Merchandise comparisons retain their immediate current-price-field requirement.
+The historical value never enters calculations. Actual hiding, labelled historical prices
 and extra comparison candidates cannot supply this proof. Existing validated,
 visually rendered accessibility-hidden price pairs retain their treatment.
 
