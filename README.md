@@ -184,6 +184,14 @@ A second order's items or bill cannot supply missing facts. Duplicate selected
 order IDs are rejected at JSON validation; different IDs are retained even when
 their merchandise or amounts coincide. Any failure preserves prior complete JSON.
 
+The current owner-local bill diagnostic found multiple raw `Items total` matches
+in the selected dialog before the bounded bill owner was established. Their
+individual ownership and currentness are unknown. The implementation remains
+unchanged: neither hidden matches nor matches outside a candidate bill may be
+silently discarded. The [bill ownership diagnostic proposal](docs/amazon-now-bill-ownership-diagnostic.md)
+defines the missing categorical evidence and one minimal, separately authorized
+owner-local check. It is a proposal, not a live test or an extraction correction.
+
 Fictional offline fixtures exercise a shared interface whose two original links
 automatically select separate seven-line and one-line orders, with independent
 identities, counts and bills. Their markup is test evidence, not a claim about
