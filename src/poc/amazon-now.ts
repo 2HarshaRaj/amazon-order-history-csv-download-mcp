@@ -18,6 +18,13 @@ const NOW_PATHS = [
   "/tez/browse/orderTracking",
 ];
 const TIMEOUT = 3000;
+// Applied only after the DOM reader's existing whitespace normalization.
+// Singular/plural agreement remains display-only, as with the original grammar.
+export const NOW_ITEM_COUNT_LABEL = /^([1-9]\d?|100) items?(?: in order)?$/i;
+// Discover malformed numeric declarations and known unsupported suffixes too,
+// so conflicting evidence cannot disappear. This signal never authorizes a count.
+const ITEM_COUNT_SIGNAL =
+  /^(?:[+-]?(?:\d[\d.,eE+-]*|\.\d+)|NaN|Infinity) items?(?: in (?:order|delivery)(?: today)?)?$/i;
 // Discovery stays conservative: malformed/duplicate quantity signals must not
 // disappear. Only this complete grammar may supply the purchased count.
 const QUANTITY_SIGNAL = /^(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?$/i;
@@ -431,6 +438,8 @@ async function readNowDom(
         quantitySignalSource,
         quantityFieldSource,
         approximateQuantityFieldSource,
+        countLabelSource,
+        countSignalSource,
         selectedOrderScope,
       },
     ) => {
@@ -540,6 +549,7 @@ async function readNowDom(
         } else if (exact(root, /^Order Details$/i).length !== 1) abort();
         const nodes = elements(root);
         let declaredItemCount: number | undefined;
+        let countDeclaration: Element | undefined;
         if (selectedOrderScope) {
           // The dialog belongs to one independently listed order, regardless of
           // delivery tabs elsewhere in the shared tracking interface.
@@ -554,15 +564,22 @@ async function readNowDom(
           // Require independent count evidence, without assigning its meaning
           // to either lines or units here. The parsed facts must corroborate both.
           const countDeclarations = rawLeaves.filter((el) =>
-            /^\d+ items?$/i.test(raw(el)),
+            new RegExp(countSignalSource, "i").test(raw(el)),
           );
+          const countMatch =
+            countDeclarations.length === 1
+              ? new RegExp(countLabelSource, "i").exec(
+                  raw(countDeclarations[0]),
+                )
+              : null;
           if (
             countDeclarations.length !== 1 ||
             !current(countDeclarations[0]) ||
-            !/^[1-9]\d* items?$/i.test(raw(countDeclarations[0]))
+            !countMatch
           )
             abort("NOW_ITEM_FIELDS_INVALID");
-          declaredItemCount = Number(raw(countDeclarations[0]).split(" ")[0]);
+          countDeclaration = countDeclarations[0];
+          declaredItemCount = Number(countMatch?.[1]);
           if (
             !Number.isSafeInteger(declaredItemCount) ||
             declaredItemCount > 100
@@ -1209,6 +1226,21 @@ async function readNowDom(
             ).length !== 1
           )
             abort("NOW_ITEM_PRICE_OWNER_INVALID");
+        if (countDeclaration) {
+          const declaration = countDeclaration;
+          const semanticOwner = declaration.closest(
+            'article, li, [role="listitem"], a, button, [role="tab"]',
+          );
+          if (
+            [...itemRoots, ...nonItemRoots].some((region) =>
+              region.contains(declaration),
+            ) ||
+            (semanticOwner &&
+              semanticOwner !== root &&
+              root.contains(semanticOwner))
+          )
+            abort("NOW_ITEM_FIELDS_INVALID");
+        }
         const amount = /^(?:-\s*)?(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i;
         reason = "NOW_ITEM_FIELDS_INVALID";
         const packageSize =
@@ -1578,6 +1610,8 @@ async function readNowDom(
       quantitySignalSource: QUANTITY_SIGNAL.source,
       quantityFieldSource: QUANTITY_FIELD.source,
       approximateQuantityFieldSource: APPROX_QUANTITY_FIELD.source,
+      countLabelSource: NOW_ITEM_COUNT_LABEL.source,
+      countSignalSource: ITEM_COUNT_SIGNAL.source,
       selectedOrderScope,
     },
     { timeout: TIMEOUT },

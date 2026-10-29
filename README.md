@@ -157,8 +157,15 @@ For the alternate action, coverage is established inside that one verified
 **Order Details** dialog. The existing bounded merchandise reader must own every
 eligible product image/link, quantity and current price, with no incomplete
 semantic item rows, overlapping owners, hidden merchandise or duplicate products.
-One independently displayed, current, canonical `N item` / `N items` declaration
-is required; missing, hidden, repeated or inconsistent counts fail closed.
+One independently displayed, current declaration is required: `N item`, `N items`,
+`N item in order` or `N items in order`, after whitespace normalization. The
+anchored grammar captures only a canonical integer from 1 through 100; the
+existing singular/plural behavior is retained. Missing, hidden, historical,
+repeated (including mixed formats), malformed or ambiguously owned declarations
+fail closed. Product names, tab labels, controls and tracking previews cannot
+provide the independent count; unsupported suffixes never authorize extraction.
+The observed `in order` wording supports this narrow compatibility correction,
+but the precise seventh-order label and successful live extraction remain unverified.
 The observed declaration's line-versus-unit meaning has not been independently
 established. This correction accepts it only when **both** the validated line
 count and purchased-unit sum agree with it. When those interpretations differ,

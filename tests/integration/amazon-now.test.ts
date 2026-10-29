@@ -1949,6 +1949,168 @@ browserTests("integrated Amazon Now extraction", () => {
     },
   );
 
+  test.each([
+    ["7 items", "1 items"],
+    ["7 items in order", "1 item in order"],
+    ["7 item in order", "1 items in order"],
+    [" \n7\titems\u00a0in\norder ", " 1\titem "],
+  ])(
+    "count-label formats %j / %j preserve separate shared orders",
+    async (first, second) => {
+      const labels = JSON.stringify([first, second]);
+      await prepareShared(
+        `const open=openDetails;window.openDetails=id=>{open(id);document.querySelector('#shared-count').textContent=${labels}[id===ids[0]?0:1]}`,
+      );
+      const listed = await listOrders(
+        options.startDate,
+        options.endDate,
+        options.maxOrders,
+      );
+      const combined = [];
+      for (const [index, summary] of listed.orders.entries()) {
+        const detail = await extractOrderItems(
+          summary.orderId,
+          undefined,
+          summary,
+        );
+        expect(detail.items).toHaveLength(index ? 1 : 7);
+        expect(detail.orderTotal?.amount).toBe(index ? 14 : 69);
+        expect(
+          await page.evaluate(
+            () => (window as unknown as { tabClicks: number }).tabClicks,
+          ),
+        ).toBe(0);
+        combined.push({ summary, detail });
+      }
+      const saved = createExportDocument(
+        options,
+        1,
+        combined,
+        new Date().toISOString(),
+      );
+      expect(saved.orders.map((order) => order.orderId)).toEqual([
+        id,
+        secondId,
+      ]);
+      expect(
+        saved.orders.map((order) => order.items.map((item) => item.lineIndex)),
+      ).toEqual([[0, 1, 2, 3, 4, 5, 6], [0]]);
+    },
+  );
+
+  const countLabelFailures: Array<[string, string]> = [
+    ["missing", "document.querySelector('#split-count').remove()"],
+    [
+      "identical duplicates",
+      "document.querySelector('#split-count').after(document.querySelector('#split-count').cloneNode(true))",
+    ],
+    [
+      "mixed old and new",
+      "document.querySelector('#split-count').insertAdjacentHTML('afterend','<p>2 items</p>')",
+    ],
+    ["hidden", "document.querySelector('#split-count').hidden=true"],
+    [
+      "historical",
+      "document.querySelector('#split-count').style.textDecoration='line-through'",
+    ],
+    [
+      "hidden conflicting old",
+      "document.querySelector('#split-count').insertAdjacentHTML('afterend','<p hidden>1 item</p>')",
+    ],
+    [
+      "hidden conflicting new",
+      "document.querySelector('#split-count').insertAdjacentHTML('afterend','<p hidden>1 item in order</p>')",
+    ],
+    ...[
+      "02 items in order",
+      "0 items in order",
+      "-2 items in order",
+      "2.0 items in order",
+      "2e0 items in order",
+      "101 items in order",
+      `${"9".repeat(310)} items in order`,
+      "2 items in delivery",
+      "2 items in order today",
+    ].map((label): [string, string] => [
+      label,
+      `document.querySelector('#split-count').textContent=${JSON.stringify(label)}`,
+    ]),
+    [
+      "malformed duplicate",
+      "document.querySelector('#split-count').insertAdjacentHTML('afterend','<p>-2 items in order</p>')",
+    ],
+    [
+      "unsupported-suffix duplicate",
+      "document.querySelector('#split-count').insertAdjacentHTML('afterend','<p>2 items in delivery</p>')",
+    ],
+    [
+      "merchandise name cannot supply count",
+      "document.querySelector('#split-count').remove();document.querySelector('#split-row-1 > span').textContent='2 items in order'",
+    ],
+    [
+      "control cannot supply count",
+      "document.querySelector('#split-count').innerHTML='<button>2 items in order</button>'",
+    ],
+    [
+      "tracking tab cannot supply count",
+      "document.querySelector('#split-count').remove();document.querySelector('main').insertAdjacentHTML('beforeend','<div role=tab>2 items in order</div>')",
+    ],
+    [
+      "line mismatch",
+      "document.querySelector('#split-count').textContent='1 item in order'",
+    ],
+    [
+      "unit-sum mismatch",
+      "const row=document.querySelector('#split-row-1');row.querySelectorAll('span')[1].textContent='Qty: 2';row.querySelectorAll('span')[2].outerHTML='<div>Unit price: ₹5.50</div><div>Line total: ₹11.00</div>'",
+    ],
+    [
+      "wrong-order dialog",
+      "document.querySelector('#split-sheet b').nextElementSibling.textContent='111-2222222-4444444'",
+    ],
+    [
+      "hidden conflicting identity",
+      "document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','<span hidden>111-2222222-4444444</span>')",
+    ],
+    [
+      "incomplete merchandise",
+      "document.querySelector('#split-row-2').remove()",
+    ],
+    [
+      "financial mismatch",
+      "document.querySelector('#split-bill > div:last-child span').textContent='₹31.00'",
+    ],
+  ];
+  test.each(countLabelFailures)(
+    "count-label extraction rejects %s and preserves prior JSON",
+    async (_name, mutation) => {
+      html = alterSplit(
+        `document.querySelector('#split-count').textContent='2 items in order';${mutation}`,
+      );
+      listHtml = list.replace("₹230.00", "₹30.00");
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-count-label-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "previous complete export");
+      try {
+        await expect(
+          runExport({ ...options, output }, () => {}, {
+            list: listOrders,
+            extract: extractOrderItems,
+            write: validateAndWriteExport,
+            report: async () => {},
+            cleanup: async () => {},
+          }),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("previous complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("delayed source-owned View details is awaited before ownership validation", async () => {
     html = alterSplit(
       `const action=document.querySelector('#split-action');action.remove();setTimeout(()=>document.querySelector('#split-id').after(action),300)`,
@@ -4089,6 +4251,9 @@ browserTests("integrated Amazon Now extraction", () => {
         order: { orderIndex: 2 },
         counts: { items: 0, adjustments: 0 },
       });
+      // A legitimate UUID can contain "111-" inside a four-digit hex group.
+      // Keep that case deterministic while still forbidding the full source ID.
+      report.runId = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
       expect(report.events.at(-1)).toMatchObject({
         reason,
         orderIndex: 2,
@@ -4101,8 +4266,9 @@ browserTests("integrated Amazon Now extraction", () => {
         expect(names).toHaveLength(1);
         const saved = await readFile(join(directory, names[0]), "utf8");
         expect(JSON.parse(saved).failure.reason).toBe(reason);
+        expect(saved + String(error)).not.toContain(id);
         expect(saved + String(error)).not.toMatch(
-          /111-|Invented|₹|230\.00|https?:|<html>|invalid amount|Unknown charged fact/,
+          /\b111-|Invented|₹|230\.00|https?:|<html>|invalid amount|Unknown charged fact/,
         );
       } finally {
         await rm(directory, { recursive: true, force: true });

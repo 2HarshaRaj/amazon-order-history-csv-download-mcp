@@ -1,4 +1,5 @@
 import {
+  NOW_ITEM_COUNT_LABEL,
   NowSnapshot,
   parseNowSnapshot,
   validateNowSelectedOrder,
@@ -32,6 +33,55 @@ const snapshot = (): NowSnapshot => ({
   ],
 });
 const listed = { amount: 30, currency: "INR" };
+
+describe("anchored, normalized Amazon Now item-count label grammar", () => {
+  test.each([
+    ["1 item", 1],
+    ["1 items", 1],
+    ["7 items", 7],
+    ["1 item in order", 1],
+    ["7 items in order", 7],
+    ["7 item", 7],
+    ["1 items in order", 1],
+    ["7 item in order", 7],
+    ["100 items in order", 100],
+    ["99 items", 99],
+    ["  7\titems\n in\u00a0order  ", 7],
+    ["1 ITEM IN ORDER", 1],
+  ])("captures only the validated integer from %j", (label, expected) => {
+    const normalized = String(label).replace(/\s+/g, " ").trim();
+    expect(NOW_ITEM_COUNT_LABEL.exec(normalized)?.[1]).toBe(String(expected));
+  });
+  test.each([
+    "",
+    "item in order",
+    "0 items",
+    "00 items in order",
+    "01 item",
+    "07 items in order",
+    "-1 item in order",
+    "+1 item in order",
+    "1.0 items in order",
+    ".5 items in order",
+    "1e1 items in order",
+    "101 items",
+    "9007199254740992 items in order",
+    `${"9".repeat(310)} items in order`,
+    "NaN items",
+    "Infinity items in order",
+    "2 items in delivery",
+    "2 items in order today",
+    "2 items elsewhere",
+    "Product 2 items in order",
+    "2 items in orders",
+    "2 items in order.",
+    "2 item(s) in order",
+    "2 items2",
+    "2 items in order 3 items",
+  ])("rejects malformed or unsupported label %j", (label) => {
+    expect(NOW_ITEM_COUNT_LABEL.exec(label)).toBeNull();
+  });
+});
 
 describe("selected-order count and financial corroboration", () => {
   test("corroborates one order independently of row order", () => {
