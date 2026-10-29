@@ -251,6 +251,7 @@ export function createExportDocument(
       "Export validation failed: invalid extraction timestamp.",
     );
 
+  const seenOrderIds = new Set<string>();
   const jsonOrders = orders.map((order, orderIndex): JsonOrder => {
     const { summary, detail } = order;
     diagnostics?.select(summary, orderIndex);
@@ -258,6 +259,7 @@ export function createExportDocument(
     diagnostics?.at("validation", "ORDER_FACTS_INVALID");
     if (
       !summary.orderId ||
+      seenOrderIds.has(summary.orderId) ||
       !summary.orderDate ||
       detail.orderId !== summary.orderId
     ) {
@@ -267,6 +269,7 @@ export function createExportDocument(
         "Export validation failed: missing or mismatched required order facts.",
       );
     }
+    seenOrderIds.add(summary.orderId);
     // Amazon publishes no monetary facts for this explicitly cancelled shape.
     // Nulls represent unavailable values without bypassing normal reconciliation.
     const cancelledWithoutMoney =

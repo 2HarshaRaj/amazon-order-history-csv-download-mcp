@@ -38,6 +38,10 @@ const splitDelivery = readFileSync(
   join(__dirname, "fixtures/amazon-now-split-delivery.html"),
   "utf8",
 );
+const sharedTracking = readFileSync(
+  join(__dirname, "fixtures/amazon-now-shared-tracking.html"),
+  "utf8",
+);
 const alterSplit = (code: string): string =>
   splitDelivery + `<script>${code};document.currentScript.remove()</script>`;
 const splitPackagePrices = readFileSync(
@@ -1706,7 +1710,7 @@ browserTests("integrated Amazon Now extraction", () => {
       replacement,
     );
 
-  test("source-owned split action opens once and publishes both deliveries as one selected order", async () => {
+  test("source-owned alternate action publishes only the selected order without tracking manifests", async () => {
     html = splitDelivery;
     listHtml = list.replace("₹230.00", "₹30.00");
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
@@ -1766,54 +1770,184 @@ browserTests("integrated Amazon Now extraction", () => {
     }
   });
 
-  test("separately listed selected IDs remain two purchases with independent line indexes", async () => {
-    const second = "111-2222222-4444444";
-    listHtml = list.replace("₹230.00", "₹30.00");
-    listHtml += listHtml.replaceAll(id, second);
-    html = splitDelivery;
-    await context.route("**/tez/**", (route) =>
-      route.fulfill({
-        contentType: "text/html; charset=utf-8",
-        body: splitDelivery.replaceAll(
-          id,
-          new URL(route.request().url()).searchParams.get("orderId")!,
-        ),
-      }),
-    );
-    // UFF redirects must also keep each selected ID.
+  const secondId = "111-2222222-4444444";
+  const prepareShared = async (mutation = ""): Promise<void> => {
+    listHtml =
+      list.replace("₹230.00", "₹69.00") +
+      list.replaceAll(id, secondId).replace("₹230.00", "₹14.00");
     await context.route("**/uff/**", (route) =>
       route.fulfill({
         contentType: "text/html",
         body: `<script>location.replace(${JSON.stringify(tracking.replace(id, new URL(route.request().url()).searchParams.get("orderID")!))})</script>`,
       }),
     );
+    await context.route("**/tez/**", (route) =>
+      route.fulfill({
+        contentType: "text/html; charset=utf-8",
+        body:
+          sharedTracking +
+          (mutation
+            ? `<script>${mutation};document.currentScript.remove()</script>`
+            : ""),
+      }),
+    );
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+  };
+  test("shared tracking links select and publish seven-line and one-line orders independently", async () => {
+    await prepareShared();
     const listed = await listOrders(
       options.startDate,
       options.endDate,
       options.maxOrders,
     );
-    const rows = [];
-    for (const summary of listed.orders)
-      rows.push({
+    expect(listed.orders.map((order) => order.orderId)).toEqual([id, secondId]);
+    const combined = [];
+    for (const [index, summary] of listed.orders.entries()) {
+      const detail = await extractOrderItems(
+        summary.orderId,
+        undefined,
         summary,
-        detail: await extractOrderItems(summary.orderId, undefined, summary),
-      });
-    const saved = createExportDocument(
-      options,
-      1,
-      rows,
-      new Date().toISOString(),
-    );
-    expect(saved.orders.map((order) => order.orderId)).toEqual([id, second]);
-    expect(saved.orders.map((order) => order.orderTotal)).toEqual([30, 30]);
-    expect(
-      saved.orders.map((order) => order.items.map((item) => item.lineIndex)),
-    ).toEqual([
-      [0, 1],
-      [0, 1],
-    ]);
+      );
+      expect(detail.orderId).toBe(summary.orderId);
+      expect(detail.items).toHaveLength(index ? 1 : 7);
+      expect(detail.orderTotal?.amount).toBe(index ? 14 : 69);
+      expect(await page.locator(`#panel-${index + 1}`).isVisible()).toBe(true);
+      expect(
+        await page.evaluate(() => ({
+          tabs: (window as unknown as { tabClicks: number }).tabClicks,
+          details: (window as unknown as { detailClicks: number }).detailClicks,
+        })),
+      ).toEqual({ tabs: 0, details: 1 });
+      combined.push({ summary, detail });
+    }
+    const directory = await mkdtemp(join(tmpdir(), "now-shared-complete-"));
+    try {
+      const output = join(directory, "orders.json");
+      await validateAndWriteExport(
+        output,
+        options,
+        1,
+        combined,
+        new Date().toISOString(),
+      );
+      const saved = JSON.parse(await readFile(output, "utf8"));
+      expect(
+        saved.orders.map((order: { orderId: string }) => order.orderId),
+      ).toEqual([id, secondId]);
+      expect(
+        saved.orders.map((order: { orderTotal: number }) => order.orderTotal),
+      ).toEqual([69, 14]);
+      expect(
+        saved.orders[0].items.map(
+          (item: { lineIndex: number }) => item.lineIndex,
+        ),
+      ).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(saved.orders[1].items).toEqual([
+        expect.objectContaining({
+          lineIndex: 0,
+          asin: "B0SHRD0008",
+          productName: "Fictional shared order two item",
+          quantity: 1,
+          unitPrice: 13,
+          itemTotal: 13,
+        }),
+      ]);
+      expect(
+        saved.orders[0].items.map((item: { asin: string }) => item.asin),
+      ).toEqual(Array.from({ length: 7 }, (_, i) => `B0SHRD000${i + 1}`));
+      expect(JSON.stringify(saved)).not.toMatch(
+        /declaredItemCount|actionProof|tabClicks/,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
+  test.each([
+    "wrongTab",
+    "wrongSummary",
+    "wrongDialog",
+    "borrowedItem",
+    "borrowedBill",
+    "missingCount",
+    "conflictingCount",
+    "incomplete",
+    "duplicateItem",
+    "mixedOrders",
+    "competingControls",
+    "navigation",
+    "duplicateOrder",
+  ])(
+    "shared tracking rejects %s and preserves prior complete JSON",
+    async (mode) => {
+      const mutations: Record<string, string> = {
+        wrongTab: "selectOrder(1)",
+        wrongSummary:
+          "document.querySelector('#shared-owner-1 span').textContent=ids[1]",
+        wrongDialog:
+          "window.openDetails=()=>{detailClicks++;const sheet=document.querySelector('#shared-sheet');sheet.innerHTML=details[ids[1]];sheet.hidden=false}",
+        borrowedItem:
+          "const open=openDetails;window.openDetails=id=>{open(id);document.querySelector('#shared-items article').setAttribute('data-order-id',ids[1])}",
+        borrowedBill:
+          "const open=openDetails;window.openDetails=id=>{open(id);document.querySelector('#shared-bill').outerHTML=new DOMParser().parseFromString(details[ids[1]],'text/html').querySelector('#shared-bill').outerHTML}",
+        missingCount:
+          "const open=openDetails;window.openDetails=id=>{open(id);document.querySelector('#shared-count').remove()}",
+        conflictingCount:
+          "const open=openDetails;window.openDetails=id=>{open(id);document.querySelector('#shared-count').textContent='1 item'}",
+        incomplete:
+          "const open=openDetails;window.openDetails=id=>{open(id);document.querySelector('#shared-items article').remove()}",
+        duplicateItem:
+          "const open=openDetails;window.openDetails=id=>{open(id);const rows=document.querySelectorAll('#shared-items article');rows[1].replaceWith(rows[0].cloneNode(true))}",
+        mixedOrders:
+          "const open=openDetails;window.openDetails=id=>{open(id);document.querySelector('#shared-sheet').insertAdjacentHTML('beforeend',details[ids[1]])}",
+        competingControls: "document.querySelector('#panel-2').hidden=false",
+        navigation:
+          "history.replaceState({},'',location.href.replace(ids[0],ids[1]))",
+      };
+      await prepareShared(mutations[mode] ?? "");
+      const directory = await mkdtemp(join(tmpdir(), "now-shared-failure-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "previous complete export");
+      const listDependency: typeof listOrders = async (...args) => {
+        const result = await listOrders(...args);
+        if (mode === "duplicateOrder") result.orders.push(result.orders[0]);
+        return result;
+      };
+      try {
+        await expect(
+          runExport({ ...options, output }, () => {}, {
+            list: listDependency,
+            extract: extractOrderItems,
+            write: validateAndWriteExport,
+            report: async () => {},
+            cleanup: async () => {},
+          }),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("previous complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(
+          await page.evaluate(
+            () => (window as unknown as { tabClicks: number }).tabClicks,
+          ),
+        ).toBe(0);
+        if (
+          [
+            "wrongTab",
+            "wrongSummary",
+            "competingControls",
+            "navigation",
+          ].includes(mode)
+        )
+          expect(
+            await page.evaluate(
+              () =>
+                (window as unknown as { detailClicks: number }).detailClicks,
+            ),
+          ).toBe(0);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("delayed source-owned View details is awaited before ownership validation", async () => {
     html = alterSplit(
@@ -1834,6 +1968,41 @@ browserTests("integrated Amazon Now extraction", () => {
   });
 
   const splitFailures: Array<[string, string, boolean]> = [
+    [
+      "historical source identity",
+      `document.querySelector('#split-id span').style.textDecoration='line-through'`,
+      false,
+    ],
+    [
+      "hidden conflicting source identity",
+      `document.querySelector('#split-owner').insertAdjacentHTML('beforeend','<span hidden>111-2222222-4444444</span>')`,
+      false,
+    ],
+    [
+      "historical dialog identity",
+      `document.querySelector('#split-sheet b').nextElementSibling.style.textDecoration='line-through'`,
+      true,
+    ],
+    ...[2, 3].map((count): [string, string, boolean] => [
+      `ambiguous line-versus-unit count ${count}`,
+      `document.querySelector('#split-count').textContent='${count} items';const row=document.querySelector('#split-row-1');row.querySelectorAll('span')[1].textContent='Qty: 2';row.querySelectorAll('span')[2].outerHTML='<div>Unit price: ₹5.50</div><div>Line total: ₹11.00</div>'`,
+      true,
+    ]),
+    [
+      "missing item count",
+      `document.querySelector('#split-count').remove()`,
+      true,
+    ],
+    [
+      "borrowed merchandise owner",
+      `document.querySelector('#split-row-1').setAttribute('data-order-id','111-2222222-4444444')`,
+      true,
+    ],
+    [
+      "incomplete semantic row",
+      `document.querySelector('#split-items').insertAdjacentHTML('beforeend','<article>Unverified invented merchandise</article>')`,
+      true,
+    ],
     [
       "contradicting item count",
       `document.querySelector('#split-count').textContent='3 items'`,
@@ -1858,26 +2027,6 @@ browserTests("integrated Amazon Now extraction", () => {
       "nested source ancestors",
       `const main=document.querySelector('main');main.innerHTML='<div class="order-card"><div class="order-card">'+main.innerHTML+'</div></div>'`,
       false,
-    ],
-    [
-      "unowned third delivery",
-      `document.querySelector('main').insertAdjacentHTML('beforeend','<h2>Delivery 3</h2>')`,
-      false,
-    ],
-    [
-      "unowned source product",
-      `document.querySelector('main').insertAdjacentHTML('beforeend','<a href="https://www.amazon.in/dp/B0SPLT0099">Unowned invented product</a>')`,
-      false,
-    ],
-    [
-      "hidden unowned source row",
-      `document.querySelector('main').insertAdjacentHTML('beforeend','<li hidden>Unowned invented product</li>')`,
-      false,
-    ],
-    [
-      "unproven primary source scope",
-      `document.querySelector('main').outerHTML='<div>'+document.querySelector('main').innerHTML+'</div>'`,
-      true,
     ],
     [
       "hidden extra dialog row",
@@ -1972,7 +2121,7 @@ browserTests("integrated Amazon Now extraction", () => {
     ],
     [
       "nested delivery card",
-      `document.querySelector('#source-delivery-2').setAttribute('data-order-id','111-2222222-4444444')`,
+      `document.querySelector('#split-owner').insertAdjacentHTML('beforeend','<div data-order-id="111-2222222-4444444"></div>')`,
       false,
     ],
     [
@@ -2016,26 +2165,6 @@ browserTests("integrated Amazon Now extraction", () => {
       true,
     ],
     [
-      "scope absent despite matching total",
-      `document.querySelectorAll('#split-owner section').forEach(el=>el.remove())`,
-      true,
-    ],
-    [
-      "incomplete second delivery",
-      `document.querySelector('#source-delivery-2').remove()`,
-      false,
-    ],
-    [
-      "hidden source merchandise",
-      `document.querySelector('#source-delivery-2 li').hidden=true`,
-      false,
-    ],
-    [
-      "duplicate source merchandise",
-      `document.querySelector('#source-delivery-2 li').innerHTML=document.querySelector('#source-delivery-1 li').innerHTML`,
-      true,
-    ],
-    [
       "missing dialog merchandise",
       `document.querySelector('#split-row-2').remove()`,
       true,
@@ -2043,16 +2172,6 @@ browserTests("integrated Amazon Now extraction", () => {
     [
       "duplicate dialog merchandise",
       `document.querySelector('#split-items').append(document.querySelector('#split-row-1').cloneNode(true))`,
-      true,
-    ],
-    [
-      "different dialog merchandise",
-      `document.querySelector('#split-row-2 > span').textContent='Different invented rice'`,
-      true,
-    ],
-    [
-      "delivery-specific dialog bill",
-      `document.querySelector('#split-sheet h1').insertAdjacentHTML('afterend','<h2>Delivery 1</h2>')`,
       true,
     ],
     [
@@ -2176,21 +2295,22 @@ browserTests("integrated Amazon Now extraction", () => {
       html = alterSplit(
         `const action=document.querySelector('#split-action');const open=action.onclick;action.onclick=()=>{history.pushState({},'',${JSON.stringify(target)});history.pushState({},'',${JSON.stringify(tracking)});open.call(action)}`,
       );
+      const invoke = (): ReturnType<typeof extractNowOrder> =>
+        extractNowOrder(page, id, outer, async () => {}, undefined, {
+          amount: 30,
+          currency: "INR",
+        });
       if (mode === "valid") {
-        const detail = await extractNowOrder(
-          page,
-          id,
-          outer,
-          async () => {},
-          undefined,
-          { amount: 30, currency: "INR" },
-        );
+        const detail = await invoke();
         expect(detail.items).toHaveLength(2);
-      } else await expect(extract()).rejects.toThrow();
+      } else
+        await expect(invoke()).rejects.toMatchObject({
+          reason: "DETAIL_ORDER_MISMATCH",
+        });
     },
   );
 
-  test.each(["identity", "manifest", "replacement", "navigation"])(
+  test.each(["identity", "summary", "replacement", "navigation"])(
     "immediate split ownership revalidation rejects changed %s before clicking",
     async (mode) => {
       html = splitDelivery;
@@ -2225,10 +2345,10 @@ browserTests("integrated Amazon Now extraction", () => {
                             document.querySelector(
                               "#split-id span",
                             )!.textContent = "111-2222222-4444444";
-                          if (mode === "manifest")
-                            document.querySelector(
-                              "#source-delivery-2 a",
-                            )!.textContent = "Changed invented rice";
+                          if (mode === "summary")
+                            document
+                              .querySelector("#split-owner")!
+                              .append("Changed summary evidence");
                           if (mode === "replacement")
                             document
                               .querySelector("#split-action")!

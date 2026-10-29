@@ -1,11 +1,11 @@
 import {
   NowSnapshot,
   parseNowSnapshot,
-  validateNowSplitScope,
+  validateNowSelectedOrder,
 } from "../../../src/poc/amazon-now";
 
 const id = "111-2222222-3333333";
-const manifest = (): NowSnapshot["items"] => [
+const sampleItems = (): NowSnapshot["items"] => [
   {
     parts: ["Invented split lentils", "Qty: 1"],
     alts: [],
@@ -19,7 +19,8 @@ const manifest = (): NowSnapshot["items"] => [
 ];
 const snapshot = (): NowSnapshot => ({
   orderIds: [id],
-  items: manifest().map((item, index) => ({
+  declaredItemCount: 2,
+  items: sampleItems().map((item, index) => ({
     ...item,
     parts: [...item.parts, index ? "₹17.00" : "₹11.00"],
   })),
@@ -32,45 +33,52 @@ const snapshot = (): NowSnapshot => ({
 });
 const listed = { amount: 30, currency: "INR" };
 
-describe("selected-order split scope (pure corroboration, no aggregation)", () => {
-  test("corroborates both deliveries regardless of dialog row order", () => {
+describe("selected-order count and financial corroboration", () => {
+  test("corroborates one order independently of row order", () => {
     const facts = snapshot();
     facts.items.reverse();
     const detail = parseNowSnapshot(facts, id);
-    expect(() =>
-      validateNowSplitScope(manifest(), facts, detail, listed),
-    ).not.toThrow();
+    expect(() => validateNowSelectedOrder(facts, detail, listed)).not.toThrow();
     expect(detail.items.map((item) => item.itemTotal.amount)).toEqual([17, 11]);
     expect(detail.orderTotal.amount).toBe(30);
     expect(JSON.stringify(detail)).not.toMatch(
       /sourceItems|splitScope|Delivery/,
     );
   });
-  test.each([
-    "missing",
-    "omitted",
-    "duplicate",
-    "name",
-    "quantity",
-    "identifier",
-    "untrustedUrl",
-    "extraFields",
-  ])("rejects %s source merchandise", (mode) => {
-    const source = manifest();
-    if (mode === "missing") source.length = 0;
-    if (mode === "omitted") source.pop();
-    if (mode === "duplicate") source[1] = source[0];
-    if (mode === "name") source[0].parts[0] = "Different invented item";
-    if (mode === "quantity") source[0].parts[1] = "Qty: 2";
-    if (mode === "identifier")
-      source[0].hrefs[0] = "https://www.amazon.in/dp/B0SPLT0099";
-    if (mode === "untrustedUrl") source[0].hrefs[0] += "?redirect=1";
-    if (mode === "extraFields") source[0].parts.push("Qty: 2");
-    const facts = snapshot();
-    expect(() =>
-      validateNowSplitScope(source, facts, parseNowSnapshot(facts, id), listed),
-    ).toThrow();
-  });
+  test.each([undefined, 0, 1, 3, NaN, Infinity, 101, 2.5])(
+    "rejects absent or inconsistent item count %s",
+    (count) => {
+      const facts = snapshot();
+      const detail = parseNowSnapshot(facts, id);
+      facts.declaredItemCount = count;
+      expect(() => validateNowSelectedOrder(facts, detail, listed)).toThrow();
+    },
+  );
+  test.each([2, 3])(
+    "does not assign unqualified item count %s to lines or units",
+    (count) => {
+      const facts = snapshot();
+      facts.declaredItemCount = count;
+      facts.items[0].parts = [
+        "Invented split lentils",
+        "Qty: 2",
+        "Unit price: ₹11.00",
+        "Line total: ₹22.00",
+      ];
+      facts.billRows = [
+        "Items total ₹39.00",
+        "Handling fee ₹2.00",
+        "You pay ₹41.00",
+      ];
+      const detail = parseNowSnapshot(facts, id);
+      expect(() =>
+        validateNowSelectedOrder(facts, detail, {
+          amount: 41,
+          currency: "INR",
+        }),
+      ).toThrow();
+    },
+  );
   test.each([
     undefined,
     { amount: 11, currency: "INR" },
@@ -80,12 +88,7 @@ describe("selected-order split scope (pure corroboration, no aggregation)", () =
   ])("requires the independent selected listed total: %j", (total) => {
     const facts = snapshot();
     expect(() =>
-      validateNowSplitScope(
-        manifest(),
-        facts,
-        parseNowSnapshot(facts, id),
-        total,
-      ),
+      validateNowSelectedOrder(facts, parseNowSnapshot(facts, id), total),
     ).toThrow();
   });
   test.each([
@@ -104,12 +107,7 @@ describe("selected-order split scope (pure corroboration, no aggregation)", () =
     if (mode === "duplicatePluralFee")
       facts.billRows.push("Delivery fees Free");
     expect(() =>
-      validateNowSplitScope(
-        manifest(),
-        facts,
-        parseNowSnapshot(facts, id),
-        listed,
-      ),
+      validateNowSelectedOrder(facts, parseNowSnapshot(facts, id), listed),
     ).toThrow();
   });
 });

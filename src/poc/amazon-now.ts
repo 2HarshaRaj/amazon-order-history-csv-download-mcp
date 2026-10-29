@@ -114,6 +114,8 @@ const snapshotSchema = z
     orderIds: z.array(z.string().max(100)).length(1),
     billRows: z.array(z.string().min(1).max(200)).min(1).max(24),
     singleLinePriceDomVerified: z.literal(true).optional(),
+    // Internal dialog evidence only; never serialized into merchandise JSON.
+    declaredItemCount: z.number().int().positive().max(100).optional(),
     items: z
       .array(
         z
@@ -418,7 +420,7 @@ async function readNowDom(
   orderId: string,
   mode: "tracking" | "dialog",
   trace?: FailureDiagnostics,
-  splitScope = false,
+  selectedOrderScope = false,
 ): Promise<NowSnapshot> {
   const result = await anchor.evaluate(
     (
@@ -429,7 +431,7 @@ async function readNowDom(
         quantitySignalSource,
         quantityFieldSource,
         approximateQuantityFieldSource,
-        splitScope,
+        selectedOrderScope,
       },
     ) => {
       type DomReason = (typeof NOW_DOM_FAILURES)[number];
@@ -537,9 +539,10 @@ async function readNowDom(
           if (!found) abort();
         } else if (exact(root, /^Order Details$/i).length !== 1) abort();
         const nodes = elements(root);
-        let splitItemCount: number | undefined;
-        if (splitScope) {
-          // Alternate sheets must be order-wide, not an inferred delivery bill.
+        let declaredItemCount: number | undefined;
+        if (selectedOrderScope) {
+          // The dialog belongs to one independently listed order, regardless of
+          // delivery tabs elsewhere in the shared tracking interface.
           // Inspect raw leaves as well: hidden/historical identities and bill
           // declarations cannot disappear through the normal current-text view.
           const raw = (el: Element): string =>
@@ -548,22 +551,23 @@ async function readNowDom(
             (el) =>
               !Array.from(el.children).some((child) => raw(child) === raw(el)),
           );
-          // A recognizable item-count declaration is corroboration only. It
-          // cannot replace the source manifest or contradict extracted rows.
+          // Require independent count evidence, without assigning its meaning
+          // to either lines or units here. The parsed facts must corroborate both.
           const countDeclarations = rawLeaves.filter((el) =>
             /^\d+ items?$/i.test(raw(el)),
           );
-          if (countDeclarations.length) {
-            if (
-              countDeclarations.length !== 1 ||
-              !current(countDeclarations[0]) ||
-              !/^[1-9]\d* items?$/i.test(raw(countDeclarations[0]))
-            )
-              abort("NOW_ITEM_FIELDS_INVALID");
-            splitItemCount = Number(raw(countDeclarations[0]).split(" ")[0]);
-            if (!Number.isSafeInteger(splitItemCount) || splitItemCount > 100)
-              abort("NOW_ITEM_FIELDS_INVALID");
-          }
+          if (
+            countDeclarations.length !== 1 ||
+            !current(countDeclarations[0]) ||
+            !/^[1-9]\d* items?$/i.test(raw(countDeclarations[0]))
+          )
+            abort("NOW_ITEM_FIELDS_INVALID");
+          declaredItemCount = Number(raw(countDeclarations[0]).split(" ")[0]);
+          if (
+            !Number.isSafeInteger(declaredItemCount) ||
+            declaredItemCount > 100
+          )
+            abort("NOW_ITEM_FIELDS_INVALID");
           const identities = nodes.flatMap((el) =>
             Array.from(el.childNodes).flatMap((node) =>
               node.nodeType === 3
@@ -592,8 +596,7 @@ async function readNowDom(
               (el) =>
                 el.hasAttribute("data-order-id") &&
                 el.getAttribute("data-order-id") !== expected,
-            ) ||
-            rawLeaves.some((el) => /^Delivery\s+\d+\b/i.test(raw(el)))
+            )
           )
             abort("NOW_DIALOG_IDENTITY_INVALID");
           for (const label of [
@@ -680,7 +683,7 @@ async function readNowDom(
           return abort();
         const billRoot = bill;
         if (
-          splitScope &&
+          selectedOrderScope &&
           elements(billRoot).some(
             (el) =>
               !current(el) &&
@@ -1405,7 +1408,15 @@ async function readNowDom(
               ),
           };
         });
-        if (splitItemCount !== undefined && splitItemCount !== items.length)
+        if (
+          selectedOrderScope &&
+          nodes.some(
+            (el) =>
+              el.matches(rowBoundary) &&
+              !nonItemRoots.some((region) => region.contains(el)) &&
+              [...itemRoots].filter((row) => el.contains(row)).length !== 1,
+          )
+        )
           abort("NOW_ITEM_FIELDS_INVALID");
         const single = items.length === 1 ? items[0] : undefined;
         const declaration = single?.parts.filter((part) =>
@@ -1546,6 +1557,7 @@ async function readNowDom(
           orderIds,
           billRows,
           items,
+          ...(declaredItemCount !== undefined ? { declaredItemCount } : {}),
           ...(singleLinePriceDomVerified
             ? { singleLinePriceDomVerified: true as const }
             : {}),
@@ -1566,7 +1578,7 @@ async function readNowDom(
       quantitySignalSource: QUANTITY_SIGNAL.source,
       quantityFieldSource: QUANTITY_FIELD.source,
       approximateQuantityFieldSource: APPROX_QUANTITY_FIELD.source,
-      splitScope,
+      selectedOrderScope,
     },
     { timeout: TIMEOUT },
   );
@@ -1601,15 +1613,14 @@ async function readNowDom(
   return result.facts;
 }
 
-/** Deliberately small alternate-action owner. Never ascend to a page-wide card.
- * An optional, independent two-delivery product manifest can prove sheet scope;
- * absence of that stronger evidence permits opening, but never publication.
+/** Prove the currently visible summary owns this action for the requested order.
+ * Other delivery tabs and their merchandise never supply ownership or coverage.
  */
 async function readAlternateAction(
   action: ElementHandle<HTMLElement | SVGElement>,
   expected: string,
   expectedUrl: string,
-): Promise<NowSnapshot["items"]> {
+): Promise<string> {
   const result = await action.evaluate(
     (button, { expected, expectedUrl }) => {
       const doc = button.ownerDocument;
@@ -1727,155 +1738,36 @@ async function readAlternateAction(
             return null;
         }
         if (cardOwners > 1) return null;
-        // Only these independently named semantic sections can supply coverage.
-        // No delivery prices are read, added or promoted to a purchase total.
-        const sections = Array.from(owner.children).filter(
-          (el) => el.tagName === "SECTION",
-        );
-        if (!sections.length) return { items: [] };
-        if (sections.length !== 2) return null;
-        const sourceRoot = owner.closest("main");
-        if (!sourceRoot) return { items: [] };
-        const sourceNodes = all.filter(
-          (el) =>
-            !el.closest('[role="dialog"]') &&
-            (current(el) || sourceRoot.contains(el)),
-        );
-        const deliveryLabels = sourceNodes.filter(
-          (el) =>
-            /^Delivery\s+\d+$/i.test(raw(el)) &&
-            !Array.from(el.children).some((child) => raw(child) === raw(el)),
-        );
-        if (
-          deliveryLabels.length !== 2 ||
-          deliveryLabels.some(
-            (el) => !sections.some((section) => section.contains(el)),
-          ) ||
-          sourceNodes.some(
-            (el) =>
-              el.matches(
-                'li, [role="listitem"], a[href*="/dp/"], a[href*="/gp/product/"], img[alt]',
-              ) && !sections.some((section) => section.contains(el)),
-          )
-        )
-          return null;
-        if (
-          nodes.some((el) => !current(el)) ||
-          owner.querySelector("img, svg, input, select, textarea") ||
-          nodes.some(
-            (el) =>
-              el.tagName === "A" &&
-              !sections.some((section) => section.contains(el)),
-          )
-        )
-          return null;
-        const items: NowSnapshot["items"] = [];
-        for (let index = 0; index < 2; index++) {
-          const section = sections[index];
-          const heading = section.firstElementChild;
-          const list = heading?.nextElementSibling;
-          if (
-            !heading ||
-            heading.tagName !== "H2" ||
-            raw(heading) !== `Delivery ${index + 1}` ||
-            !list ||
-            list.tagName !== "UL" ||
-            section.children.length !== 2 ||
-            !list.children.length ||
-            texts(section).some(({ el }) => !current(el))
-          )
-            return null;
-          for (const row of Array.from(list.children)) {
-            const [link, quantity] = Array.from(row.children);
-            if (
-              row.tagName !== "LI" ||
-              row.children.length !== 2 ||
-              !link ||
-              !quantity ||
-              link.tagName !== "A" ||
-              link.children.length ||
-              quantity.tagName !== "SPAN" ||
-              quantity.children.length ||
-              !/^Qty: [1-9]\d*$/.test(raw(quantity)) ||
-              !raw(link) ||
-              raw(link).length > 200 ||
-              Array.from(row.childNodes).some(
-                (node) => node.nodeType === 3 && node.textContent?.trim(),
-              )
-            )
-              return null;
-            const href = new URL(link.getAttribute("href") ?? "", doc.URL).href;
-            if (
-              !/^https:\/\/(?:www\.)?amazon\.in\/dp\/[A-Z0-9]{10}$/.test(href)
-            )
-              return null;
-            items.push({
-              parts: [raw(link), raw(quantity)],
-              alts: [],
-              hrefs: [href],
-            });
-          }
-        }
-        // Reject unaccounted source content, including hidden extra delivery rows.
-        if (
-          tokens.some(
-            ({ el, value }) =>
-              !sections.some((section) => section.contains(el)) &&
-              !button.contains(el) &&
-              !/^Order ID\s*:?$/i.test(value) &&
-              !ids.some((id) => id.el === el && id.value === value),
-          )
-        )
-          return null;
-        return { items };
+        return raw(owner);
       }
       return null;
     },
     { expected, expectedUrl },
   );
   if (!result) fail();
-  return result.items;
+  return result;
 }
 
-/** Corroborate a complete selected-order sheet; never aggregate deliveries.
- * This proof is internal and never enters the public merchandise JSON.
+/** Validate one selected order's independent count and bill. No delivery merge.
+ * Unqualified counts are accepted only when line and unit interpretations agree;
+ * unresolved multi-unit count semantics must not authorize incomplete coverage.
  */
-export function validateNowSplitScope(
-  sourceItems: NowSnapshot["items"],
+export function validateNowSelectedOrder(
   facts: NowSnapshot,
   detail: NowOrderDetail,
   listedTotal?: { amount: number; currency: string },
 ): void {
-  const invalid = (): never => fail("ITEM_SHAPE_AMBIGUOUS");
+  const count = facts.declaredItemCount;
+  const units = detail.items.reduce((sum, item) => sum + item.quantity, 0);
   if (
-    !sourceItems.length ||
-    sourceItems.length > 100 ||
-    sourceItems.length !== detail.items.length
+    !count ||
+    !Number.isSafeInteger(count) ||
+    count > 100 ||
+    count !== detail.items.length ||
+    count !== units ||
+    facts.items.length !== detail.items.length
   )
-    invalid();
-  const seen = new Set<string>();
-  for (const source of sourceItems) {
-    if (
-      source.parts.length !== 2 ||
-      source.hrefs.length !== 1 ||
-      source.alts.length
-    )
-      invalid();
-    const asin = /^https:\/\/(?:www\.)?amazon\.in\/dp\/([A-Z0-9]{10})$/.exec(
-      source.hrefs[0],
-    )?.[1];
-    if (!asin) return invalid();
-    if (seen.has(asin)) invalid();
-    seen.add(asin);
-    const quantity = explicitQuantity(source.parts[1], invalid);
-    const matches = detail.items.filter((item) => item.asin === asin);
-    if (
-      matches.length !== 1 ||
-      matches[0].productName !== source.parts[0] ||
-      matches[0].quantity !== quantity
-    )
-      invalid();
-  }
+    fail("ITEM_SHAPE_AMBIGUOUS");
   const itemsTotals = facts.billRows.filter((row) =>
     /^Items total\s/i.test(row),
   );
@@ -1995,12 +1887,12 @@ export async function extractNowOrder(
       .getByText(/^View details$/i)
       .filter({ visible: true });
     let action: ElementHandle<HTMLElement | SVGElement> | null = null;
-    let sourceItems: NowSnapshot["items"] | undefined;
+    let actionProof: string | undefined;
     if (await alternate.count()) {
       if ((await controls.count()) || (await alternate.count()) !== 1) fail();
       action = await alternate.elementHandle();
       if (!action) fail();
-      sourceItems = await readAlternateAction(action, orderId, page.url());
+      actionProof = await readAlternateAction(action, orderId, page.url());
       at("NOW_TRACKING_IDENTITY");
     } else {
       await controls.first().waitFor({ state: "visible", timeout: TIMEOUT });
@@ -2021,7 +1913,7 @@ export async function extractNowOrder(
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
     if (
       invalidNavigation ||
-      (sourceItems === undefined
+      (actionProof === undefined
         ? (await controls.count()) !== 1
         : (await controls.count()) !== 0 || (await alternate.count()) !== 1) ||
       (await dialogs.count())
@@ -2029,7 +1921,7 @@ export async function extractNowOrder(
       fail();
     if (action) {
       const fresh = await readAlternateAction(action, orderId, page.url());
-      if (JSON.stringify(fresh) !== JSON.stringify(sourceItems)) fail();
+      if (fresh !== actionProof) fail();
       if (await dialogs.count()) fail();
       validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
       if (invalidNavigation) fail();
@@ -2045,14 +1937,14 @@ export async function extractNowOrder(
       orderId,
       "dialog",
       trace,
-      sourceItems !== undefined,
+      actionProof !== undefined,
     );
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
     at("NOW_PARSING");
     const detail = parseNowSnapshot(facts, orderId, trace);
-    if (sourceItems !== undefined)
-      validateNowSplitScope(sourceItems, facts, detail, listedTotal);
+    if (actionProof !== undefined)
+      validateNowSelectedOrder(facts, detail, listedTotal);
     return detail;
   } catch (error) {
     // A sign-in redirect after the click must preserve manual-authentication

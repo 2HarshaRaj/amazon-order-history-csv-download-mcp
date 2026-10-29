@@ -141,45 +141,49 @@ before one click; locator replacement cannot select another button. All committe
 main-frame navigation URLs still undergo the existing allowlist/selected-ID
 checks, including intermediate navigations when the final URL is valid.
 
-Opening a matching split-delivery dialog does **not** prove complete merchandise
-or bill scope. The narrow publication path additionally requires an independent
-source manifest inside that same bounded owner and a semantic `main` tracking
-region: exactly two direct semantic
-sections, headed `Delivery 1` and `Delivery 2`, each containing a nonempty `ul`.
-Each `li` must contain only one plain product-name `/dp/ASIN` link and one
-explicit `Qty: N` span. Links must be canonical HTTPS Amazon.in product links;
-all source evidence must be current. Every unique ASIN, exact name and purchased
-quantity must occur exactly once in the independently parsed dialog, regardless
-of row order. Missing, duplicate, hidden or unaccounted merchandise fails closed.
-This is corroboration of one selected order, not delivery-price aggregation.
-Additional delivery headings or merchandise evidence outside those sections
-cannot be ignored. Hidden source rows within the primary tracking region and
-hidden merchandise/quantity evidence in the dialog also reject the proof.
-When a `N item(s)` declaration is present, it must be unique, current and a
-canonical positive count matching the extracted line count. It never supplies
-missing merchandise or replaces the independent source evidence.
+Two different Amazon Order IDs can share one Amazon Now tracking interface.
+Each original link discovered in **Your Orders** identifies its own order and may
+open a different delivery tab automatically. Each separately listed ID remains
+one JSON order with its own merchandise, bill and line indexes. The exporter
+preserves the initial tab selection and never clicks another tab to force a
+match. Delivery numbers, visual order and the tracking URL alone do not prove
+which order is currently selected: the visible bounded summary ID, its unique
+button, the entry/navigation identity and the opened dialog ID must all agree.
+Other inactive panels and tracking previews never provide merchandise facts.
+No combined delivery manifest, product links in the summary or parent-purchase
+aggregation is required or supported.
 
-The alternate sheet must be a unique real **Order Details** dialog with one
-current matching identity and no hidden/conflicting identities. It must contain
-one current **Bill summary**, **Items total** and **You pay**. Segmented dialogs,
-hidden/historical bill amounts, subtotal substitutes and duplicate charge kinds
-are unsupported on this path. The independent Items total must agree with the
-validated merchandise within the existing one-paise tolerance; You pay must match
-the selected independently listed INR total exactly in paise. The normal price,
-quantity, adjustment and reconciliation validators still run. A matching billed
-total alone never proves coverage. No delivery subtotal supplies a whole-order
-total. Separate independently listed Order IDs remain separate purchases, each
-with its own deterministic item indexes; delivery labels create no extra orders.
+For the alternate action, coverage is established inside that one verified
+**Order Details** dialog. The existing bounded merchandise reader must own every
+eligible product image/link, quantity and current price, with no incomplete
+semantic item rows, overlapping owners, hidden merchandise or duplicate products.
+One independently displayed, current, canonical `N item` / `N items` declaration
+is required; missing, hidden, repeated or inconsistent counts fail closed.
+The observed declaration's line-versus-unit meaning has not been independently
+established. This correction accepts it only when **both** the validated line
+count and purchased-unit sum agree with it. When those interpretations differ,
+extraction fails rather than guessing what Amazon meant. Multi-unit alternate
+orders with an unqualified count remain unsupported pending owner-local evidence;
+the existing ordinary quantity and single-line price-derivation paths retain
+their behavior. The declaration never invents missing merchandise.
 
-The owner-local diagnostic established the alternative control and matching
-dialog/total, but did not establish this independent two-delivery manifest or
-whole-purchase coverage. Its observed small owner may therefore open successfully
-and still fail the scope gate. These deliberately narrow source structures are
-tested with invented offline HTML; they are **not confirmed live Amazon markup**.
-Other split layouts, absent coverage evidence, repeated ASINs across deliveries,
-and delivery-specific dialogs remain unsupported and preserve prior JSON on
-failure. No claim of general split-delivery compatibility is made. Further
-owner-local inspection/validation is required before expanding these predicates.
+The selected dialog must have one independently recognized **Bill summary**,
+**Items total** and effective **You pay**, with no hidden/conflicting identities
+or financial evidence. Items total must agree with validated line totals within
+the existing one-paise tolerance; merchandise plus supported signed adjustments
+must reconcile independently. You pay must match the selected order's listed
+INR total **exactly in integer paise**. A matching total alone is insufficient.
+A second order's items or bill cannot supply missing facts. Duplicate selected
+order IDs are rejected at JSON validation; different IDs are retained even when
+their merchandise or amounts coincide. Any failure preserves prior complete JSON.
+
+Fictional offline fixtures exercise a shared interface whose two original links
+automatically select separate seven-line and one-line orders, with independent
+identities, counts and bills. Their markup is test evidence, not a claim about
+live Amazon DOM. The owner-confirmed per-order model supersedes the earlier
+combined-manifest assumption. Live compatibility, count semantics beyond the
+unambiguous case and any other unsupported presentation require separate
+owner-local validation before acceptance is expanded.
 
 For Now, the independent billed total is the unique effective INR **Bill summary
 → You pay** declaration, with internal provenance `amazon-now-you-pay`. Computed
