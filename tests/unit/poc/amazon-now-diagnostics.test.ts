@@ -83,8 +83,12 @@ function transport(failing?: Phase, error: unknown = new Error(privateText)) {
     url: () => tracking,
     goto: async () => stop("NOW_NAVIGATION"),
     waitForURL: async () => {},
+    waitForFunction: async () => stop("NOW_DETAILS_CONTROL"),
     locator: () => dialog,
-    getByText: () => control,
+    getByText: (pattern: RegExp) =>
+      pattern.source === "^View details$"
+        ? { ...control, count: async () => 0 }
+        : control,
   } as unknown as Page;
   return { page, control, dialog, dialogFacts };
 }

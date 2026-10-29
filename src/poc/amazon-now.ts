@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import type { Frame, Locator, Page } from "playwright";
+import type { ElementHandle, Frame, Locator, Page } from "playwright";
 import { z } from "zod";
 import {
   DiagnosticError,
@@ -418,6 +418,7 @@ async function readNowDom(
   orderId: string,
   mode: "tracking" | "dialog",
   trace?: FailureDiagnostics,
+  splitScope = false,
 ): Promise<NowSnapshot> {
   const result = await anchor.evaluate(
     (
@@ -428,6 +429,7 @@ async function readNowDom(
         quantitySignalSource,
         quantityFieldSource,
         approximateQuantityFieldSource,
+        splitScope,
       },
     ) => {
       type DomReason = (typeof NOW_DOM_FAILURES)[number];
@@ -535,6 +537,86 @@ async function readNowDom(
           if (!found) abort();
         } else if (exact(root, /^Order Details$/i).length !== 1) abort();
         const nodes = elements(root);
+        let splitItemCount: number | undefined;
+        if (splitScope) {
+          // Alternate sheets must be order-wide, not an inferred delivery bill.
+          // Inspect raw leaves as well: hidden/historical identities and bill
+          // declarations cannot disappear through the normal current-text view.
+          const raw = (el: Element): string =>
+            el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+          const rawLeaves = nodes.filter(
+            (el) =>
+              !Array.from(el.children).some((child) => raw(child) === raw(el)),
+          );
+          // A recognizable item-count declaration is corroboration only. It
+          // cannot replace the source manifest or contradict extracted rows.
+          const countDeclarations = rawLeaves.filter((el) =>
+            /^\d+ items?$/i.test(raw(el)),
+          );
+          if (countDeclarations.length) {
+            if (
+              countDeclarations.length !== 1 ||
+              !current(countDeclarations[0]) ||
+              !/^[1-9]\d* items?$/i.test(raw(countDeclarations[0]))
+            )
+              abort("NOW_ITEM_FIELDS_INVALID");
+            splitItemCount = Number(raw(countDeclarations[0]).split(" ")[0]);
+            if (!Number.isSafeInteger(splitItemCount) || splitItemCount > 100)
+              abort("NOW_ITEM_FIELDS_INVALID");
+          }
+          const identities = nodes.flatMap((el) =>
+            Array.from(el.childNodes).flatMap((node) =>
+              node.nodeType === 3
+                ? [
+                    ...(node.textContent ?? "").matchAll(
+                      /\b(?:\d{3}-\d{7}-\d{7}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b/gi,
+                    ),
+                  ].map((match) => ({ el, id: match[0] }))
+                : [],
+            ),
+          );
+          const identityLabels = nodes.filter(
+            (el) =>
+              /^Order ID\b/i.test(raw(el)) &&
+              !Array.from(el.children).some((child) =>
+                /^Order ID\b/i.test(raw(child)),
+              ),
+          );
+          if (
+            identityLabels.length !== 1 ||
+            !current(identityLabels[0]) ||
+            identities.length !== 1 ||
+            identities[0].id !== expected ||
+            !current(identities[0].el) ||
+            nodes.some(
+              (el) =>
+                el.hasAttribute("data-order-id") &&
+                el.getAttribute("data-order-id") !== expected,
+            ) ||
+            rawLeaves.some((el) => /^Delivery\s+\d+\b/i.test(raw(el)))
+          )
+            abort("NOW_DIALOG_IDENTITY_INVALID");
+          for (const label of [
+            /^Items total\b/i,
+            /^You pay\b/i,
+            /^Bill summary$/i,
+          ]) {
+            const declarations = rawLeaves.filter((el) => label.test(raw(el)));
+            if (declarations.length !== 1 || !current(declarations[0]))
+              abort("NOW_BILL_SUMMARY_INVALID");
+          }
+          if (
+            nodes.some(
+              (el) =>
+                !current(el) &&
+                (el.matches(
+                  'article, li, [role="listitem"], img, a[href*="/dp/"], a[href*="/gp/product/"]',
+                ) ||
+                  new RegExp(quantitySignalSource, "i").test(raw(el))),
+            )
+          )
+            abort("NOW_ITEM_FIELDS_INVALID");
+        }
         const owner = root.closest("[data-order-id]");
         if (owner && owner.getAttribute("data-order-id") !== expected) abort();
         if (
@@ -597,6 +679,21 @@ async function readNowDom(
         )
           return abort();
         const billRoot = bill;
+        if (
+          splitScope &&
+          elements(billRoot).some(
+            (el) =>
+              !current(el) &&
+              Array.from(el.childNodes).some(
+                (node) =>
+                  node.nodeType === 3 &&
+                  /₹|\bINR\b|\b(?:Items total|You pay)\b/i.test(
+                    node.textContent ?? "",
+                  ),
+              ),
+          )
+        )
+          abort("NOW_BILL_ROW_INVALID");
         reason = "NOW_BILL_ROW_INVALID";
         const billLabel =
           /^(You pay|Items? total|Items? subtotal|Subtotal|Handling (?:fee|charge)s?|Delivery (?:fee|charge)s?|Shipping (?:fee|charge)s?|Discount|Promotion(?: applied)?)(?=\s|:|$)/i;
@@ -1308,6 +1405,8 @@ async function readNowDom(
               ),
           };
         });
+        if (splitItemCount !== undefined && splitItemCount !== items.length)
+          abort("NOW_ITEM_FIELDS_INVALID");
         const single = items.length === 1 ? items[0] : undefined;
         const declaration = single?.parts.filter((part) =>
           quantitySignal.test(part),
@@ -1467,6 +1566,7 @@ async function readNowDom(
       quantitySignalSource: QUANTITY_SIGNAL.source,
       quantityFieldSource: QUANTITY_FIELD.source,
       approximateQuantityFieldSource: APPROX_QUANTITY_FIELD.source,
+      splitScope,
     },
     { timeout: TIMEOUT },
   );
@@ -1501,12 +1601,327 @@ async function readNowDom(
   return result.facts;
 }
 
+/** Deliberately small alternate-action owner. Never ascend to a page-wide card.
+ * An optional, independent two-delivery product manifest can prove sheet scope;
+ * absence of that stronger evidence permits opening, but never publication.
+ */
+async function readAlternateAction(
+  action: ElementHandle<HTMLElement | SVGElement>,
+  expected: string,
+  expectedUrl: string,
+): Promise<NowSnapshot["items"]> {
+  const result = await action.evaluate(
+    (button, { expected, expectedUrl }) => {
+      const doc = button.ownerDocument;
+      const view = doc.defaultView;
+      const raw = (el: Element): string =>
+        el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      const current = (el: Element): boolean => {
+        if (!view || !el.getClientRects().length) return false;
+        for (let node: Element | null = el; node; node = node.parentElement) {
+          const style = view.getComputedStyle(node);
+          if (
+            node.hasAttribute("hidden") ||
+            node.getAttribute("aria-hidden") === "true" ||
+            ["S", "DEL", "STRIKE"].includes(node.tagName) ||
+            style.display === "none" ||
+            ["hidden", "collapse"].includes(style.visibility) ||
+            style.opacity === "0" ||
+            style.textDecorationLine.includes("line-through")
+          )
+            return false;
+        }
+        return true;
+      };
+      const all = Array.from(doc.querySelectorAll("*"));
+      if (
+        all.length > 5000 ||
+        doc.URL !== expectedUrl ||
+        !button.isConnected ||
+        button.tagName !== "BUTTON" ||
+        button.hasAttribute("disabled") ||
+        button.getAttribute("aria-disabled") === "true" ||
+        !current(button) ||
+        raw(button) !== "View details"
+      )
+        return null;
+      const actions = all.filter(
+        (el) =>
+          /^(?:View order details|View details)$/i.test(raw(el)) &&
+          !Array.from(el.children).some((child) => raw(child) === raw(el)) &&
+          current(el),
+      );
+      if (actions.length !== 1 || !button.contains(actions[0])) return null;
+      const texts = (scope: Element): Array<{ el: Element; value: string }> =>
+        [scope, ...Array.from(scope.querySelectorAll("*"))].flatMap((el) =>
+          Array.from(el.childNodes)
+            .filter((node) => node.nodeType === 3 && node.textContent?.trim())
+            .map((node) => ({
+              el,
+              value: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+            })),
+        );
+      const selectedSources = all
+        .filter((el) => !el.closest('[role="dialog"]') && current(el))
+        .flatMap((el) =>
+          Array.from(el.childNodes).filter(
+            (node) =>
+              node.nodeType === 3 && node.textContent?.includes(expected),
+          ),
+        );
+      if (selectedSources.length !== 1) return null;
+      let owner: Element | null = button.parentElement;
+      for (
+        let depth = 0;
+        owner && depth < 4;
+        depth++, owner = owner.parentElement
+      ) {
+        if (["BODY", "HTML", "MAIN"].includes(owner.tagName)) return null;
+        const tokens = texts(owner);
+        if (!tokens.some(({ value }) => /^Order ID\s*:?$/i.test(value)))
+          continue;
+        // The first labeled common ancestor must satisfy every bound. Do not skip
+        // a conflicting small card in search of a more convenient larger owner.
+        const ids = tokens.filter(({ value }) =>
+          /\b(?:\d{3}-\d{7}-\d{7}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b/i.test(
+            value,
+          ),
+        );
+        const nodes = [owner, ...Array.from(owner.querySelectorAll("*"))];
+        if (
+          owner.tagName !== "DIV" ||
+          raw(owner).length > 500 ||
+          nodes.length > 80 ||
+          ids.length !== 1 ||
+          !new RegExp("^#?\\s*" + expected + "$", "i").test(ids[0].value) ||
+          !current(ids[0].el) ||
+          tokens.filter(({ value }) => /^Order ID\s*:?$/i.test(value))
+            .length !== 1 ||
+          tokens.some(({ el }) => !current(el)) ||
+          owner.querySelector(
+            "main, nav, aside, header, footer, article, [role=dialog], [data-order-id], .order-card, .order",
+          ) ||
+          nodes.filter(
+            (el) =>
+              /^(?:View order details|View details)$/i.test(raw(el)) &&
+              !Array.from(el.children).some((child) => raw(child) === raw(el)),
+          ).length !== 1
+        )
+          return null;
+        let cardOwners = 0;
+        for (
+          let ancestor: Element | null = owner;
+          ancestor;
+          ancestor = ancestor.parentElement
+        ) {
+          if (
+            ancestor.matches(
+              'article, li, [role="listitem"], [data-order-id], .order-card, .order',
+            )
+          )
+            cardOwners++;
+          if (
+            ancestor.hasAttribute("data-order-id") &&
+            ancestor.getAttribute("data-order-id") !== expected
+          )
+            return null;
+        }
+        if (cardOwners > 1) return null;
+        // Only these independently named semantic sections can supply coverage.
+        // No delivery prices are read, added or promoted to a purchase total.
+        const sections = Array.from(owner.children).filter(
+          (el) => el.tagName === "SECTION",
+        );
+        if (!sections.length) return { items: [] };
+        if (sections.length !== 2) return null;
+        const sourceRoot = owner.closest("main");
+        if (!sourceRoot) return { items: [] };
+        const sourceNodes = all.filter(
+          (el) =>
+            !el.closest('[role="dialog"]') &&
+            (current(el) || sourceRoot.contains(el)),
+        );
+        const deliveryLabels = sourceNodes.filter(
+          (el) =>
+            /^Delivery\s+\d+$/i.test(raw(el)) &&
+            !Array.from(el.children).some((child) => raw(child) === raw(el)),
+        );
+        if (
+          deliveryLabels.length !== 2 ||
+          deliveryLabels.some(
+            (el) => !sections.some((section) => section.contains(el)),
+          ) ||
+          sourceNodes.some(
+            (el) =>
+              el.matches(
+                'li, [role="listitem"], a[href*="/dp/"], a[href*="/gp/product/"], img[alt]',
+              ) && !sections.some((section) => section.contains(el)),
+          )
+        )
+          return null;
+        if (
+          nodes.some((el) => !current(el)) ||
+          owner.querySelector("img, svg, input, select, textarea") ||
+          nodes.some(
+            (el) =>
+              el.tagName === "A" &&
+              !sections.some((section) => section.contains(el)),
+          )
+        )
+          return null;
+        const items: NowSnapshot["items"] = [];
+        for (let index = 0; index < 2; index++) {
+          const section = sections[index];
+          const heading = section.firstElementChild;
+          const list = heading?.nextElementSibling;
+          if (
+            !heading ||
+            heading.tagName !== "H2" ||
+            raw(heading) !== `Delivery ${index + 1}` ||
+            !list ||
+            list.tagName !== "UL" ||
+            section.children.length !== 2 ||
+            !list.children.length ||
+            texts(section).some(({ el }) => !current(el))
+          )
+            return null;
+          for (const row of Array.from(list.children)) {
+            const [link, quantity] = Array.from(row.children);
+            if (
+              row.tagName !== "LI" ||
+              row.children.length !== 2 ||
+              !link ||
+              !quantity ||
+              link.tagName !== "A" ||
+              link.children.length ||
+              quantity.tagName !== "SPAN" ||
+              quantity.children.length ||
+              !/^Qty: [1-9]\d*$/.test(raw(quantity)) ||
+              !raw(link) ||
+              raw(link).length > 200 ||
+              Array.from(row.childNodes).some(
+                (node) => node.nodeType === 3 && node.textContent?.trim(),
+              )
+            )
+              return null;
+            const href = new URL(link.getAttribute("href") ?? "", doc.URL).href;
+            if (
+              !/^https:\/\/(?:www\.)?amazon\.in\/dp\/[A-Z0-9]{10}$/.test(href)
+            )
+              return null;
+            items.push({
+              parts: [raw(link), raw(quantity)],
+              alts: [],
+              hrefs: [href],
+            });
+          }
+        }
+        // Reject unaccounted source content, including hidden extra delivery rows.
+        if (
+          tokens.some(
+            ({ el, value }) =>
+              !sections.some((section) => section.contains(el)) &&
+              !button.contains(el) &&
+              !/^Order ID\s*:?$/i.test(value) &&
+              !ids.some((id) => id.el === el && id.value === value),
+          )
+        )
+          return null;
+        return { items };
+      }
+      return null;
+    },
+    { expected, expectedUrl },
+  );
+  if (!result) fail();
+  return result.items;
+}
+
+/** Corroborate a complete selected-order sheet; never aggregate deliveries.
+ * This proof is internal and never enters the public merchandise JSON.
+ */
+export function validateNowSplitScope(
+  sourceItems: NowSnapshot["items"],
+  facts: NowSnapshot,
+  detail: NowOrderDetail,
+  listedTotal?: { amount: number; currency: string },
+): void {
+  const invalid = (): never => fail("ITEM_SHAPE_AMBIGUOUS");
+  if (
+    !sourceItems.length ||
+    sourceItems.length > 100 ||
+    sourceItems.length !== detail.items.length
+  )
+    invalid();
+  const seen = new Set<string>();
+  for (const source of sourceItems) {
+    if (
+      source.parts.length !== 2 ||
+      source.hrefs.length !== 1 ||
+      source.alts.length
+    )
+      invalid();
+    const asin = /^https:\/\/(?:www\.)?amazon\.in\/dp\/([A-Z0-9]{10})$/.exec(
+      source.hrefs[0],
+    )?.[1];
+    if (!asin) return invalid();
+    if (seen.has(asin)) invalid();
+    seen.add(asin);
+    const quantity = explicitQuantity(source.parts[1], invalid);
+    const matches = detail.items.filter((item) => item.asin === asin);
+    if (
+      matches.length !== 1 ||
+      matches[0].productName !== source.parts[0] ||
+      matches[0].quantity !== quantity
+    )
+      invalid();
+  }
+  const itemsTotals = facts.billRows.filter((row) =>
+    /^Items total\s/i.test(row),
+  );
+  if (
+    itemsTotals.length !== 1 ||
+    facts.billRows.some((row) =>
+      /^(?:Item total|Items? subtotal|Subtotal)\b/i.test(row),
+    )
+  )
+    fail("DETAIL_TOTAL_INVALID");
+  const declared = money(itemsTotals[0].replace(/^Items total\s+/i, ""));
+  const lines = detail.items.reduce(
+    (sum, item) => sum + Math.round(item.itemTotal.amount * 100),
+    0,
+  );
+  if (
+    !Number.isSafeInteger(lines) ||
+    Math.abs(lines - Math.round(declared.amount * 100)) > 1 ||
+    !listedTotal ||
+    listedTotal.currency !== "INR" ||
+    !Number.isFinite(listedTotal.amount) ||
+    listedTotal.amount <= 0 ||
+    !Number.isSafeInteger(Math.round(listedTotal.amount * 100)) ||
+    Math.round(listedTotal.amount * 100) !==
+      Math.round(detail.orderTotal.amount * 100)
+  )
+    fail("DETAIL_TOTAL_INVALID");
+  const kinds = facts.billRows.map((row) =>
+    row
+      .replace(/\s+(?:-\s*)?(?:₹|INR|Free).*$/i, "")
+      .toLowerCase()
+      .replace(/charges?$/, "fee")
+      .replace(/fees$/, "fee")
+      .replace(/^promotion applied$/, "promotion")
+      .replace(/^shipping /, "delivery "),
+  );
+  if (new Set(kinds).size !== kinds.length) fail("DETAIL_TOTAL_INVALID");
+}
+
 export async function extractNowOrder(
   page: Page,
   orderId: string,
   outerUrl: string,
   authenticate: () => Promise<void>,
   trace?: FailureDiagnostics,
+  listedTotal?: { amount: number; currency: string },
 ): Promise<NowOrderDetail> {
   let invalidNavigation = false;
   let phase: NowCheckpoint = "NOW_NAVIGATION";
@@ -1556,40 +1971,89 @@ export async function extractNowOrder(
       .filter({ has: page.getByText(/^Order Details$/i) });
     // Never adopt a pre-existing sheet. A single explicit click must open it.
     if (await dialogs.count()) fail();
+    // Wait for either presentation to render. This discovers only availability;
+    // it never chooses an alternate element or grants permission to click it.
+    await page.waitForFunction(
+      () => {
+        const nodes = Array.from(document.querySelectorAll("*"));
+        return nodes.some(
+          (el) =>
+            /^(?:View order details|View details)$/i.test(
+              el.textContent?.replace(/\s+/g, " ").trim() ?? "",
+            ) &&
+            el.getClientRects().length > 0 &&
+            getComputedStyle(el).visibility === "visible",
+        );
+      },
+      undefined,
+      { timeout: TIMEOUT },
+    );
     const controls = page
       .getByText(/^View order details$/i)
       .filter({ visible: true });
-    await controls.first().waitFor({ state: "visible", timeout: TIMEOUT });
-    if ((await controls.count()) !== 1) fail();
-    at("NOW_TRACKING_IDENTITY");
-    const trackingFacts = await readNowDom(
-      controls,
-      orderId,
-      "tracking",
-      trace,
-    );
-    if (
-      trackingFacts.orderIds.length !== 1 ||
-      normalizeNowDisplayedId(trackingFacts.orderIds[0]) !== orderId
-    )
-      fail();
+    const alternate = page
+      .getByText(/^View details$/i)
+      .filter({ visible: true });
+    let action: ElementHandle<HTMLElement | SVGElement> | null = null;
+    let sourceItems: NowSnapshot["items"] | undefined;
+    if (await alternate.count()) {
+      if ((await controls.count()) || (await alternate.count()) !== 1) fail();
+      action = await alternate.elementHandle();
+      if (!action) fail();
+      sourceItems = await readAlternateAction(action, orderId, page.url());
+      at("NOW_TRACKING_IDENTITY");
+    } else {
+      await controls.first().waitFor({ state: "visible", timeout: TIMEOUT });
+      if ((await controls.count()) !== 1) fail();
+      at("NOW_TRACKING_IDENTITY");
+      const trackingFacts = await readNowDom(
+        controls,
+        orderId,
+        "tracking",
+        trace,
+      );
+      if (
+        trackingFacts.orderIds.length !== 1 ||
+        normalizeNowDisplayedId(trackingFacts.orderIds[0]) !== orderId
+      )
+        fail();
+    }
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
     if (
       invalidNavigation ||
-      (await controls.count()) !== 1 ||
+      (sourceItems === undefined
+        ? (await controls.count()) !== 1
+        : (await controls.count()) !== 0 || (await alternate.count()) !== 1) ||
       (await dialogs.count())
     )
       fail();
+    if (action) {
+      const fresh = await readAlternateAction(action, orderId, page.url());
+      if (JSON.stringify(fresh) !== JSON.stringify(sourceItems)) fail();
+      if (await dialogs.count()) fail();
+      validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
+      if (invalidNavigation) fail();
+    }
     at("NOW_DIALOG_OPEN");
-    await controls.click({ timeout: TIMEOUT });
+    // A captured element prevents locator re-targeting to a replacement action.
+    await (action ?? controls).click({ timeout: TIMEOUT });
     await dialogs.first().waitFor({ state: "visible", timeout: TIMEOUT });
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     at("NOW_DIALOG_IDENTITY");
-    const facts = await readNowDom(dialogs.first(), orderId, "dialog", trace);
+    const facts = await readNowDom(
+      dialogs.first(),
+      orderId,
+      "dialog",
+      trace,
+      sourceItems !== undefined,
+    );
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
     at("NOW_PARSING");
-    return parseNowSnapshot(facts, orderId, trace);
+    const detail = parseNowSnapshot(facts, orderId, trace);
+    if (sourceItems !== undefined)
+      validateNowSplitScope(sourceItems, facts, detail, listedTotal);
+    return detail;
   } catch (error) {
     // A sign-in redirect after the click must preserve manual-authentication
     // lifecycle behavior, including leaving the dedicated window open.

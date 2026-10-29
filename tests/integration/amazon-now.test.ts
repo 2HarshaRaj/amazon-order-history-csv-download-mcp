@@ -34,6 +34,12 @@ const original = readFileSync(
   join(__dirname, "fixtures/amazon-now-order.html"),
   "utf8",
 );
+const splitDelivery = readFileSync(
+  join(__dirname, "fixtures/amazon-now-split-delivery.html"),
+  "utf8",
+);
+const alterSplit = (code: string): string =>
+  splitDelivery + `<script>${code};document.currentScript.remove()</script>`;
 const splitPackagePrices = readFileSync(
   join(__dirname, "fixtures/amazon-now-a11y-prices.html"),
   "utf8",
@@ -1699,6 +1705,555 @@ browserTests("integrated Amazon Now extraction", () => {
       /<div id="a11y-price-1"[^>]*>[\s\S]*?<\/div>/,
       replacement,
     );
+
+  test("source-owned split action opens once and publishes both deliveries as one selected order", async () => {
+    html = splitDelivery;
+    listHtml = list.replace("₹230.00", "₹30.00");
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const directory = await mkdtemp(join(tmpdir(), "now-deliveries-complete-"));
+    const output = join(directory, "orders.json");
+    try {
+      await runExport({ ...options, output }, () => {}, {
+        list: listOrders,
+        extract: extractOrderItems,
+        write: validateAndWriteExport,
+        report: async () => {},
+        cleanup: async () => {},
+      });
+      const saved = JSON.parse(await readFile(output, "utf8"));
+      expect(saved.orders).toHaveLength(1);
+      expect(saved.orders[0]).toMatchObject({
+        orderId: id,
+        orderTotal: 30,
+        items: [
+          {
+            lineIndex: 0,
+            asin: "B0SPLT0001",
+            productName: "Invented split lentils",
+            quantity: 1,
+            unitPrice: 11,
+            itemTotal: 11,
+          },
+          {
+            lineIndex: 1,
+            asin: "B0SPLT0002",
+            productName: "Invented split rice",
+            quantity: 1,
+            unitPrice: 17,
+            itemTotal: 17,
+          },
+        ],
+        adjustments: [
+          {
+            adjustmentIndex: 0,
+            amount: 2,
+            extractionSource: "amazon-now-bill-summary",
+          },
+        ],
+      });
+      expect(
+        await page.locator("#split-action").getAttribute("data-clicked"),
+      ).toBe("yes");
+      expect(
+        await page.locator("#split-action").getAttribute("data-clicks"),
+      ).toBe("1");
+      expect(JSON.stringify(saved)).not.toMatch(
+        /sourceItems|splitScope|voucher|Delivery [12]/,
+      );
+      expect(await readdir(directory)).toEqual(["orders.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("separately listed selected IDs remain two purchases with independent line indexes", async () => {
+    const second = "111-2222222-4444444";
+    listHtml = list.replace("₹230.00", "₹30.00");
+    listHtml += listHtml.replaceAll(id, second);
+    html = splitDelivery;
+    await context.route("**/tez/**", (route) =>
+      route.fulfill({
+        contentType: "text/html; charset=utf-8",
+        body: splitDelivery.replaceAll(
+          id,
+          new URL(route.request().url()).searchParams.get("orderId")!,
+        ),
+      }),
+    );
+    // UFF redirects must also keep each selected ID.
+    await context.route("**/uff/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<script>location.replace(${JSON.stringify(tracking.replace(id, new URL(route.request().url()).searchParams.get("orderID")!))})</script>`,
+      }),
+    );
+    jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
+    const listed = await listOrders(
+      options.startDate,
+      options.endDate,
+      options.maxOrders,
+    );
+    const rows = [];
+    for (const summary of listed.orders)
+      rows.push({
+        summary,
+        detail: await extractOrderItems(summary.orderId, undefined, summary),
+      });
+    const saved = createExportDocument(
+      options,
+      1,
+      rows,
+      new Date().toISOString(),
+    );
+    expect(saved.orders.map((order) => order.orderId)).toEqual([id, second]);
+    expect(saved.orders.map((order) => order.orderTotal)).toEqual([30, 30]);
+    expect(
+      saved.orders.map((order) => order.items.map((item) => item.lineIndex)),
+    ).toEqual([
+      [0, 1],
+      [0, 1],
+    ]);
+  });
+
+  test("delayed source-owned View details is awaited before ownership validation", async () => {
+    html = alterSplit(
+      `const action=document.querySelector('#split-action');action.remove();setTimeout(()=>document.querySelector('#split-id').after(action),300)`,
+    );
+    const detail = await extractNowOrder(
+      page,
+      id,
+      outer,
+      async () => {},
+      undefined,
+      { amount: 30, currency: "INR" },
+    );
+    expect(detail.items).toHaveLength(2);
+    expect(
+      await page.locator("#split-action").getAttribute("data-clicks"),
+    ).toBe("1");
+  });
+
+  const splitFailures: Array<[string, string, boolean]> = [
+    [
+      "contradicting item count",
+      `document.querySelector('#split-count').textContent='3 items'`,
+      true,
+    ],
+    [
+      "hidden item count",
+      `document.querySelector('#split-count').hidden=true`,
+      true,
+    ],
+    [
+      "duplicate item count",
+      `document.querySelector('#split-count').after(document.querySelector('#split-count').cloneNode(true))`,
+      true,
+    ],
+    [
+      "noncanonical item count",
+      `document.querySelector('#split-count').textContent='02 items'`,
+      true,
+    ],
+    [
+      "nested source ancestors",
+      `const main=document.querySelector('main');main.innerHTML='<div class="order-card"><div class="order-card">'+main.innerHTML+'</div></div>'`,
+      false,
+    ],
+    [
+      "unowned third delivery",
+      `document.querySelector('main').insertAdjacentHTML('beforeend','<h2>Delivery 3</h2>')`,
+      false,
+    ],
+    [
+      "unowned source product",
+      `document.querySelector('main').insertAdjacentHTML('beforeend','<a href="https://www.amazon.in/dp/B0SPLT0099">Unowned invented product</a>')`,
+      false,
+    ],
+    [
+      "hidden unowned source row",
+      `document.querySelector('main').insertAdjacentHTML('beforeend','<li hidden>Unowned invented product</li>')`,
+      false,
+    ],
+    [
+      "unproven primary source scope",
+      `document.querySelector('main').outerHTML='<div>'+document.querySelector('main').innerHTML+'</div>'`,
+      true,
+    ],
+    [
+      "hidden extra dialog row",
+      `const row=document.querySelector('#split-row-2').cloneNode(true);row.hidden=true;document.querySelector('#split-items').append(row)`,
+      true,
+    ],
+    [
+      "hidden unowned dialog quantity",
+      `document.querySelector('#split-items').insertAdjacentHTML('beforeend','<span hidden>Qty: 1</span>')`,
+      true,
+    ],
+    ["listed total mismatch alone", "", true],
+    [
+      "duplicate plural fee",
+      `document.querySelector('#split-bill').insertAdjacentHTML('beforeend','<div>Delivery fees Free</div>')`,
+      true,
+    ],
+    [
+      "hidden extra identity label",
+      `document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','<b hidden>Order ID</b>')`,
+      true,
+    ],
+    [
+      "hidden conflicting dialog owner",
+      `document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','<span hidden data-order-id="111-2222222-4444444"></span>')`,
+      true,
+    ],
+    [
+      "other order owns action",
+      `document.querySelector('#split-id span').textContent='111-2222222-4444444'`,
+      false,
+    ],
+    [
+      "conflicting source identity",
+      `document.querySelector('#split-id').insertAdjacentHTML('beforeend','<span>111-2222222-4444444</span>')`,
+      false,
+    ],
+    [
+      "hidden source identity",
+      `document.querySelector('#split-id span').hidden=true`,
+      false,
+    ],
+    [
+      "missing source identity",
+      `document.querySelector('#split-id span').remove()`,
+      false,
+    ],
+    [
+      "hidden action",
+      `document.querySelector('#split-action').hidden=true`,
+      false,
+    ],
+    [
+      "accessible-hidden action",
+      `document.querySelector('#split-action').setAttribute('aria-hidden','true')`,
+      false,
+    ],
+    [
+      "nonbutton action",
+      `document.querySelector('#split-action').outerHTML='<a id="split-action">View details</a>'`,
+      false,
+    ],
+    [
+      "oversized common container",
+      `document.querySelector('#split-owner').append('x'.repeat(501))`,
+      false,
+    ],
+    [
+      "page-wide common container",
+      `document.querySelector('#split-owner').outerHTML=document.querySelector('#split-owner').innerHTML`,
+      false,
+    ],
+    [
+      "deep unowned action",
+      `document.querySelector('#split-action').outerHTML='<div><div><div><div><div>'+document.querySelector('#split-action').outerHTML+'</div></div></div></div></div>'`,
+      false,
+    ],
+    [
+      "duplicate actions",
+      `document.querySelector('#split-owner').append(document.querySelector('#split-action').cloneNode(true))`,
+      false,
+    ],
+    [
+      "competing old action",
+      `document.querySelector('#split-owner').insertAdjacentHTML('beforeend','<button>View order details</button>')`,
+      false,
+    ],
+    [
+      "hidden duplicate action",
+      `const clone=document.querySelector('#split-action').cloneNode(true);clone.hidden=true;document.querySelector('#split-owner').append(clone)`,
+      false,
+    ],
+    [
+      "nested delivery card",
+      `document.querySelector('#source-delivery-2').setAttribute('data-order-id','111-2222222-4444444')`,
+      false,
+    ],
+    [
+      "ambiguous competing cards",
+      `const clone=document.querySelector('#split-owner').cloneNode(true);document.querySelector('main').append(clone)`,
+      false,
+    ],
+    [
+      "preexisting dialog",
+      `document.querySelector('#split-sheet').hidden=false`,
+      false,
+    ],
+    [
+      "wrong-order dialog",
+      `document.querySelector('#split-sheet b').nextElementSibling.textContent='111-2222222-4444444'`,
+      true,
+    ],
+    [
+      "hidden duplicate dialog identity",
+      `document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','<span hidden>111-2222222-3333333</span>')`,
+      true,
+    ],
+    [
+      "hidden wrong dialog identity",
+      `document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','<span hidden>111-2222222-4444444</span>')`,
+      true,
+    ],
+    [
+      "hidden dialog identity",
+      `document.querySelector('#split-sheet b').nextElementSibling.hidden=true`,
+      true,
+    ],
+    [
+      "non-dialog view",
+      `document.querySelector('#split-sheet').removeAttribute('role')`,
+      true,
+    ],
+    [
+      "duplicate dialog",
+      `document.querySelector('#split-action').onclick=()=>{const sheet=document.querySelector('#split-sheet');sheet.hidden=false;document.body.append(sheet.cloneNode(true));document.querySelector('#split-action').dataset.clicked='yes'}`,
+      true,
+    ],
+    [
+      "scope absent despite matching total",
+      `document.querySelectorAll('#split-owner section').forEach(el=>el.remove())`,
+      true,
+    ],
+    [
+      "incomplete second delivery",
+      `document.querySelector('#source-delivery-2').remove()`,
+      false,
+    ],
+    [
+      "hidden source merchandise",
+      `document.querySelector('#source-delivery-2 li').hidden=true`,
+      false,
+    ],
+    [
+      "duplicate source merchandise",
+      `document.querySelector('#source-delivery-2 li').innerHTML=document.querySelector('#source-delivery-1 li').innerHTML`,
+      true,
+    ],
+    [
+      "missing dialog merchandise",
+      `document.querySelector('#split-row-2').remove()`,
+      true,
+    ],
+    [
+      "duplicate dialog merchandise",
+      `document.querySelector('#split-items').append(document.querySelector('#split-row-1').cloneNode(true))`,
+      true,
+    ],
+    [
+      "different dialog merchandise",
+      `document.querySelector('#split-row-2 > span').textContent='Different invented rice'`,
+      true,
+    ],
+    [
+      "delivery-specific dialog bill",
+      `document.querySelector('#split-sheet h1').insertAdjacentHTML('afterend','<h2>Delivery 1</h2>')`,
+      true,
+    ],
+    [
+      "delivery segment reconciles but disagrees with list",
+      `document.querySelector('#split-row-2').remove();document.querySelector('#split-bill').innerHTML='<h2>Bill summary</h2><div>Items total ₹11.00</div><div>You pay ₹11.00</div>'`,
+      true,
+    ],
+    [
+      "hidden Items total",
+      `document.querySelector('#split-bill > div').hidden=true`,
+      true,
+    ],
+    [
+      "missing Items total",
+      `document.querySelector('#split-bill > div').remove()`,
+      true,
+    ],
+    [
+      "wrong Items total",
+      `document.querySelector('#split-bill > div span').textContent='₹11.00'`,
+      true,
+    ],
+    [
+      "duplicate Items total",
+      `document.querySelector('#split-bill').append(document.querySelector('#split-bill > div').cloneNode(true))`,
+      true,
+    ],
+    [
+      "hidden conflicting Items total",
+      `document.querySelector('#split-bill').insertAdjacentHTML('beforeend','<div hidden>Items total ₹11.00</div>')`,
+      true,
+    ],
+    [
+      "hidden You pay",
+      `document.querySelector('#split-bill > div:last-child').hidden=true`,
+      true,
+    ],
+    [
+      "missing You pay",
+      `document.querySelector('#split-bill > div:last-child').remove()`,
+      true,
+    ],
+    [
+      "hidden conflicting You pay",
+      `document.querySelector('#split-bill').insertAdjacentHTML('beforeend','<div hidden>You pay ₹11.00</div>')`,
+      true,
+    ],
+    [
+      "duplicate financial fact",
+      `document.querySelector('#split-bill').insertAdjacentHTML('beforeend','<div>Shipping fee Free</div>')`,
+      true,
+    ],
+    [
+      "unreconciled bill",
+      `document.querySelector('#split-bill > div:last-child span').textContent='₹31.00'`,
+      true,
+    ],
+    [
+      "unsupported adjustment",
+      `document.querySelector('#split-bill').insertAdjacentHTML('beforeend','<div>Refund ₹1.00</div>')`,
+      true,
+    ],
+  ];
+  test.each(splitFailures)(
+    "split delivery rejects %s and preserves prior JSON",
+    async (name, code, clicked) => {
+      html = alterSplit(code);
+      listHtml = list.replace(
+        "₹230.00",
+        name === "listed total mismatch alone" ? "₹31.00" : "₹30.00",
+      );
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(
+        join(tmpdir(), "now-deliveries-failure-"),
+      );
+      const output = join(directory, "orders.json");
+      await writeFile(output, "previous complete export");
+      const reports: unknown[] = [];
+      try {
+        await expect(
+          runExport({ ...options, output }, () => {}, {
+            list: listOrders,
+            extract: extractOrderItems,
+            write: validateAndWriteExport,
+            report: async (report) => {
+              reports.push(report);
+            },
+            cleanup: async () => {},
+          }),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("previous complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+        expect(
+          await page
+            .locator("#split-action")
+            .first()
+            .getAttribute("data-clicked"),
+        ).toBe(clicked ? "yes" : null);
+        expect(
+          JSON.stringify(
+            reports.map((report) => (report as { events: unknown[] }).events),
+          ),
+        ).not.toMatch(/Invented split|111-|₹|amazon\.in|<html/);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(["valid", "wrongId", "invalidPath"])(
+    "split click retains all committed navigation checks: %s",
+    async (mode) => {
+      const target =
+        mode === "wrongId"
+          ? tracking.replace(id, "111-2222222-4444444")
+          : mode === "invalidPath"
+            ? "https://www.amazon.in/unsupported-order-view"
+            : tracking;
+      html = alterSplit(
+        `const action=document.querySelector('#split-action');const open=action.onclick;action.onclick=()=>{history.pushState({},'',${JSON.stringify(target)});history.pushState({},'',${JSON.stringify(tracking)});open.call(action)}`,
+      );
+      if (mode === "valid") {
+        const detail = await extractNowOrder(
+          page,
+          id,
+          outer,
+          async () => {},
+          undefined,
+          { amount: 30, currency: "INR" },
+        );
+        expect(detail.items).toHaveLength(2);
+      } else await expect(extract()).rejects.toThrow();
+    },
+  );
+
+  test.each(["identity", "manifest", "replacement", "navigation"])(
+    "immediate split ownership revalidation rejects changed %s before clicking",
+    async (mode) => {
+      html = splitDelivery;
+      const getByText = page.getByText.bind(page);
+      jest.spyOn(page, "getByText").mockImplementation((text, options) => {
+        const locator = getByText(text, options);
+        // filter() returns a new locator, so intercept its result too.
+        if (text instanceof RegExp && text.source === "^View details$") {
+          const filter = locator.filter.bind(locator);
+          jest.spyOn(locator, "filter").mockImplementation((options) => {
+            const filtered = filter(options);
+            const elementHandle = filtered.elementHandle.bind(filtered);
+            jest
+              .spyOn(filtered, "elementHandle")
+              .mockImplementation(async (...args) => {
+                const handle = await elementHandle(...args);
+                const evaluate = handle!.evaluate.bind(handle!);
+                let reads = 0;
+                jest
+                  .spyOn(handle!, "evaluate")
+                  .mockImplementation(
+                    async (...params: Parameters<typeof evaluate>) => {
+                      if (++reads === 2)
+                        await page.evaluate((mode) => {
+                          if (mode === "navigation")
+                            history.replaceState(
+                              {},
+                              "",
+                              "?orderId=111-2222222-4444444",
+                            );
+                          if (mode === "identity")
+                            document.querySelector(
+                              "#split-id span",
+                            )!.textContent = "111-2222222-4444444";
+                          if (mode === "manifest")
+                            document.querySelector(
+                              "#source-delivery-2 a",
+                            )!.textContent = "Changed invented rice";
+                          if (mode === "replacement")
+                            document
+                              .querySelector("#split-action")!
+                              .replaceWith(
+                                document
+                                  .querySelector("#split-action")!
+                                  .cloneNode(true),
+                              );
+                        }, mode);
+                      return evaluate(...params);
+                    },
+                  );
+                return handle;
+              });
+            return filtered;
+          });
+        }
+        return locator;
+      });
+      await expect(extract()).rejects.toThrow();
+      expect(
+        await page.locator("#split-action").getAttribute("data-clicked"),
+      ).toBeNull();
+    },
+  );
 
   test("nested bill comparison fixture retains exact one-line derivation and atomic publication", async () => {
     html = nestedBillOrder;

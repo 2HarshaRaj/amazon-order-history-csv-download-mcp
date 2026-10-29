@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8"><style>img {width:20px;height:20px} article {display:flex}</style>
+<!-- Entirely invented. Source merchandise is independently enumerated under both deliveries. -->
+<main><div id="split-owner">
+<div id="split-id"><b>Order ID</b><span>111-2222222-3333333</span></div>
+<button id="split-action" onclick="this.dataset.clicked='yes';this.dataset.clicks=String(Number(this.dataset.clicks||0)+1);document.querySelector('#split-sheet').hidden=false">View details</button>
+<section id="source-delivery-1"><h2>Delivery 1</h2><ul><li><a href="https://www.amazon.in/dp/B0SPLT0001">Invented split lentils</a><span>Qty: 1</span></li></ul></section>
+<section id="source-delivery-2"><h2>Delivery 2</h2><ul><li><a href="https://www.amazon.in/dp/B0SPLT0002">Invented split rice</a><span>Qty: 1</span></li></ul></section>
+</div></main>
+<section role="dialog" id="split-sheet" hidden>
+<h1>Order Details</h1><div><b>Order ID</b><span>111-2222222-3333333</span></div><p id="split-count">2 items</p>
+<div role="list" id="split-items">
+<article role="listitem" id="split-row-1"><a href="https://www.amazon.in/dp/B0SPLT0001"><img alt="B0SPLT0001" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></a><span>Invented split lentils</span><span>Qty: 1</span><span>₹11.00</span></article>
+<article role="listitem" id="split-row-2"><a href="https://www.amazon.in/dp/B0SPLT0002"><img alt="B0SPLT0002" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></a><span>Invented split rice</span><span>Qty: 1</span><span>₹17.00</span></article>
+</div>
+<section id="split-bill"><h2>Bill summary</h2><div>Items total <span>₹28.00</span></div><div>Handling fee <span>₹2.00</span></div><div>Delivery fee <span>Free</span></div><div>You pay <span>₹30.00</span></div></section>
+<section><h2>Payment method</h2><div>Invented voucher ₹30.00</div></section>
+</section>
