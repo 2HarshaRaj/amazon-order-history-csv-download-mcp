@@ -491,6 +491,24 @@ async function readNowDom(
           }
           return rendered(el, merchandisePrice);
         };
+        const rawText = (el: Element): string =>
+          el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+        const historical = (el: Element): Element | undefined => {
+          let result: Element | undefined;
+          for (
+            let node: Element | null = el;
+            node && node !== root;
+            node = node.parentElement
+          )
+            if (
+              ["S", "DEL", "STRIKE"].includes(node.tagName) ||
+              view
+                .getComputedStyle(node)
+                .textDecorationLine.includes("line-through")
+            )
+              result = node;
+          return result;
+        };
         const cache = new Map<Element, string>();
         const text = (el: Element): string => {
           const cached = cache.get(el);
@@ -620,11 +638,14 @@ async function readNowDom(
           // spaces. Also inspect raw text-node boundaries so an independent
           // split label cannot hide outside the candidate bill, even if hidden
           // or historical. This never authorizes a label absent from rawLeaves.
-          const rawParts: string[] = [];
-          const walker = root.ownerDocument.createTreeWalker(root, 4);
-          while (walker.nextNode())
-            rawParts.push(walker.currentNode.textContent ?? "");
-          const separatedRaw = rawParts.join(" ").replace(/\s+/g, " ").trim();
+          const separated = (scope: Element): string => {
+            const parts: string[] = [];
+            const walker = root.ownerDocument.createTreeWalker(scope, 4);
+            while (walker.nextNode())
+              parts.push(walker.currentNode.textContent ?? "");
+            return parts.join(" ").replace(/\s+/g, " ").trim();
+          };
+          const separatedRaw = separated(root);
           for (const label of [
             /^Items total\b/i,
             /^You pay\b/i,
@@ -642,7 +663,7 @@ async function readNowDom(
             );
             const declarations = candidates.filter(
               (el) =>
-                (raw(el).match(occurrence) ?? []).length !== 1 ||
+                (separated(el).match(occurrence) ?? []).length !== 1 ||
                 !candidates.some((child) => child !== el && el.contains(child)),
             );
             if (
@@ -650,7 +671,6 @@ async function readNowDom(
               !current(declarations[0]) ||
               // Include independently repeated text even when it follows an
               // element in a composite, or is fragmented across sibling nodes.
-              (raw(root).match(occurrence) ?? []).length !== 1 ||
               (separatedRaw.match(occurrence) ?? []).length !== 1
             )
               abort("NOW_BILL_SUMMARY_INVALID");
@@ -746,17 +766,6 @@ async function readNowDom(
             ))
         )
           abort("NOW_BILL_SUMMARY_INVALID");
-        if (
-          selectedOrderScope &&
-          elements(billRoot).some(
-            (el) =>
-              !current(el) &&
-              Array.from(el.childNodes).some(
-                (node) => node.nodeType === 3 && node.textContent?.trim(),
-              ),
-          )
-        )
-          abort("NOW_BILL_ROW_INVALID");
         reason = "NOW_BILL_ROW_INVALID";
         const billLabel =
           /^(You pay|Items? total|Items? subtotal|Subtotal|Handling (?:fee|charge)s?|Delivery (?:fee|charge)s?|Shipping (?:fee|charge)s?|Discount|Promotion(?: applied)?)(?=\s|:|$)/i;
@@ -856,6 +865,52 @@ async function readNowDom(
           }
           return `${name} ${value}`;
         });
+        // A visible old amount needs one independently label-bound row owner.
+        // Neither bill membership nor a matching current amount supplies proof.
+        const billComparison = (
+          el: Element,
+          accessiblePrice = false,
+        ): boolean => {
+          const old = historical(el);
+          if (
+            !old ||
+            !old.parentElement ||
+            !rendered(old, accessiblePrice) ||
+            !/^(?:₹|INR\s*)\s*[\d,]+(?:\.\d{1,2})?$/i.test(rawText(old)) ||
+            old.querySelector(
+              'img, svg, a, button, input, select, textarea, article, li, [role="list"], [role="listitem"]',
+            )
+          )
+            return false;
+          const owners = [...billRegions].filter((row) => row.contains(old));
+          if (owners.length !== 1) return false;
+          let bounded = false;
+          for (
+            let scope: Element | null = old.parentElement, depth = 0;
+            scope && scope !== billRoot && depth < 5;
+            scope = scope.parentElement, depth++
+          )
+            if (scope === owners[0]) bounded = true;
+          return (
+            bounded &&
+            elements(owners[0]).filter(
+              (node) =>
+                historical(node) === node && /₹|\bINR\b/i.test(rawText(node)),
+            ).length === 1
+          );
+        };
+        if (
+          selectedOrderScope &&
+          elements(billRoot).some(
+            (el) =>
+              !current(el) &&
+              Array.from(el.childNodes).some(
+                (node) => node.nodeType === 3 && node.textContent?.trim(),
+              ) &&
+              !billComparison(el),
+          )
+        )
+          abort("NOW_BILL_ROW_INVALID");
         // Every current bill fact must belong to one recognized row or its heading.
         // Unknown charges, standalone values and tender rows cannot disappear.
         const uncovered = (el: Element): string => {
@@ -892,6 +947,161 @@ async function readNowDom(
           approximateQuantityFieldSource,
         );
         const productLink = 'a[href*="/dp/"], a[href*="/gp/product/"]';
+        // The observed unavailable layout is a separate, entirely unpriced
+        // region. Prove its whole shape before excluding any quantity/image.
+        const unavailableLabels = nodes.filter(
+          (el) =>
+            /^Out of Stock Items$/i.test(rawText(el)) &&
+            !Array.from(el.children).some(
+              (child) => rawText(child) === rawText(el),
+            ),
+        );
+        let unavailableRoot: Element | undefined;
+        const unavailableAsins = new Set<string>();
+        const unavailableNames = new Set<string>();
+        if (unavailableLabels.length) {
+          const heading = unavailableLabels[0];
+          const region = heading.parentElement;
+          const rejectUnavailable = (): never =>
+            abort("NOW_NON_ITEM_REGION_INVALID");
+          const noDirectText = (el: Element): boolean =>
+            !Array.from(el.childNodes).some(
+              (node) => node.nodeType === 3 && node.textContent?.trim(),
+            );
+          if (
+            !selectedOrderScope ||
+            unavailableLabels.length !== 1 ||
+            heading.tagName !== "P" ||
+            heading.children.length ||
+            !region ||
+            region === root ||
+            region.tagName !== "DIV" ||
+            region.children.length !== 3 ||
+            region.children[0] !== heading ||
+            !noDirectText(region) ||
+            region.contains(billRoot) ||
+            billRoot.contains(region) ||
+            region.closest('article, li, [role="list"], [role="listitem"]') ||
+            region.querySelector(
+              'article, li, [role="list"], [role="listitem"], a, button, input, select, textarea, svg, [role="button"], [data-component="purchasedItems"], [data-component="itemTitle"], [data-component="unitPrice"], [data-component="quantity"]',
+            ) ||
+            elements(region).length > 500 ||
+            elements(region).some(
+              (el) =>
+                !current(el) ||
+                /₹|\bINR\b|[$€£¥]/i.test(rawText(el)) ||
+                /₹|\bINR\b|[$€£¥]/i.test(el.getAttribute("aria-label") ?? ""),
+            )
+          )
+            return rejectUnavailable();
+          const products = region.children[1],
+            notice = region.children[2];
+          if (
+            products.tagName !== "DIV" ||
+            !noDirectText(products) ||
+            products.children.length < 1 ||
+            products.children.length > 100 ||
+            notice.tagName !== "DIV" ||
+            notice.children.length !== 2 ||
+            !noDirectText(notice)
+          )
+            return rejectUnavailable();
+          const icon = notice.children[0],
+            explanation = notice.children[1];
+          if (
+            icon.tagName !== "IMG" ||
+            icon.getAttribute("alt") !== "refund-icon" ||
+            icon.getAttribute("role") !== "img" ||
+            explanation.tagName !== "DIV" ||
+            explanation.children.length !== 2 ||
+            !noDirectText(explanation) ||
+            Array.from(explanation.children).some(
+              (el) => el.tagName !== "P" || el.children.length,
+            ) ||
+            rawText(explanation.children[0]) !==
+              "Refund for these items initiated" ||
+            rawText(explanation.children[1]) !==
+              "It may take up to 3-5 business days for the refund to show in your account"
+          )
+            return rejectUnavailable();
+          for (const row of Array.from(products.children)) {
+            if (
+              row.tagName !== "DIV" ||
+              row.children.length !== 2 ||
+              !noDirectText(row)
+            )
+              return rejectUnavailable();
+            const picture = row.children[0],
+              facts = row.children[1];
+            const image = picture.children[0];
+            if (
+              picture.tagName !== "SPAN" ||
+              picture.children.length !== 1 ||
+              !noDirectText(picture) ||
+              !image ||
+              image.tagName !== "IMG" ||
+              facts.tagName !== "DIV" ||
+              facts.children.length !== 2 ||
+              !noDirectText(facts)
+            )
+              return rejectUnavailable();
+            const name = facts.children[0],
+              descriptor = facts.children[1];
+            const asin = image.getAttribute("alt") ?? "";
+            const parts = Array.from(descriptor.childNodes).filter(
+              (node) => node.nodeType !== 3 || node.textContent?.trim(),
+            );
+            const pack = /^Pack of ([1-9]\d*), ([1-9]\d*) Pcs$/.exec(
+              parts[0]?.textContent?.trim() ?? "",
+            );
+            const units = /^([1-9]\d*) unit(?:s|\(s\))?$/.exec(
+              parts[2]?.textContent?.trim() ?? "",
+            );
+            if (
+              name.tagName !== "P" ||
+              name.children.length ||
+              !rawText(name) ||
+              rawText(name).length > 500 ||
+              /₹|\bINR\b|\b(?:qty|quantity)\s*:|\bunit(?:s|\(s\))?\b/i.test(
+                rawText(name),
+              ) ||
+              descriptor.tagName !== "P" ||
+              parts.length !== 3 ||
+              parts[0].nodeType !== 3 ||
+              parts[2].nodeType !== 3 ||
+              parts[1].nodeType !== 1 ||
+              (parts[1] as Element).tagName !== "SPAN" ||
+              (parts[1] as Element).children.length ||
+              parts[1].textContent?.trim() !== "." ||
+              !pack ||
+              !units ||
+              [...pack.slice(1), units[1]].some(
+                (n) => !Number.isSafeInteger(Number(n)),
+              ) ||
+              !/^[A-Z0-9]{10}$/.test(asin) ||
+              unavailableAsins.has(asin) ||
+              unavailableNames.has(rawText(name))
+            )
+              return rejectUnavailable();
+            unavailableAsins.add(asin);
+            unavailableNames.add(rawText(name));
+          }
+          // No additional refund/unavailability claim elsewhere can be silently
+          // covered by this one recognized notice.
+          if (
+            nodes.some(
+              (el) =>
+                !region.contains(el) &&
+                Array.from(el.childNodes).some(
+                  (node) =>
+                    node.nodeType === 3 &&
+                    /\b(?:refund|out of stock)\b/i.test(node.textContent ?? ""),
+                ),
+            )
+          )
+            return rejectUnavailable();
+          unavailableRoot = region;
+        }
         const nonItemHeadings = exact(
           root,
           /^(?:Payment(?: (?:method|details|information))?|Delivery status|Order status|Status)$/i,
@@ -922,6 +1132,7 @@ async function readNowDom(
             return abort("NOW_NON_ITEM_REGION_INVALID");
           return scope;
         });
+        if (unavailableRoot) nonItemRoots.push(unavailableRoot);
         // A heading/role is not required for an isolated delivery-time decoration.
         // Only a complete delivery message plus one icon may form this region;
         // item/list boundaries and any financial/product evidence disqualify it.
@@ -1315,18 +1526,12 @@ async function readNowDom(
         reason = "NOW_ITEM_FIELDS_INVALID";
         const packageSize =
           /^(?:[1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*(?:mg|g|kg|ml|l|litres?|liters?)$/i;
-        const piecePackage =
-          /^([1-9]\d*) Pcs \((?:Approx\. )?([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*[-–]\s*([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g\)$/;
-        // Discovery for hidden/historical conflicts only, never acceptance.
-        const piecePackageSignal =
-          /^(?:[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*)?Pcs\b/i;
-        const pieceDescriptor = (value: string): boolean => {
-          const pieces = piecePackage.exec(value);
-          if (!pieces || !Number.isSafeInteger(Number(pieces[1]))) return false;
-          // Compare decimal strings exactly, as with the existing Approx.
-          // quantity grammar. Neither the pieces nor weights supply quantity.
-          const [lower, lowerFraction = ""] = pieces[2].split(".");
-          const [upper, upperFraction = ""] = pieces[3].split(".");
+        const increasingRange = (
+          lowerValue: string,
+          upperValue: string,
+        ): boolean => {
+          const [lower, lowerFraction = ""] = lowerValue.split(".");
+          const [upper, upperFraction = ""] = upperValue.split(".");
           const precision = Math.max(
             lowerFraction.length,
             upperFraction.length,
@@ -1338,8 +1543,25 @@ async function readNowDom(
               : lowerFraction.padEnd(precision, "0") <
                 upperFraction.padEnd(precision, "0");
         };
+        const piecePackage =
+          /^([1-9]\d*) Pcs \((?:Approx\. )?([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*[-–]\s*([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g\)$/;
+        // Discovery for hidden/historical conflicts only, never acceptance.
+        const piecePackageSignal =
+          /^(?:[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*)?Pcs\b/i;
+        const pieceDescriptor = (value: string): boolean => {
+          const pieces = piecePackage.exec(value);
+          if (!pieces || !Number.isSafeInteger(Number(pieces[1]))) return false;
+          // Compare decimal strings exactly, as with the existing Approx.
+          // quantity grammar. Neither the pieces nor weights supply quantity.
+          return increasingRange(pieces[2], pieces[3]);
+        };
         const packageDescriptor = (value: string): boolean => {
           if (packageSize.test(value) || pieceDescriptor(value)) return true;
+          const range =
+            /^([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)-([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g$/.exec(
+              value,
+            );
+          if (range) return increasingRange(range[1], range[2]);
           const grams =
             value.length <= 500
               ? /^Pack of ([1-9]\d*), ([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g Each$/.exec(
@@ -1511,6 +1733,19 @@ async function readNowDom(
           };
         });
         if (
+          items.some(
+            (item) =>
+              item.alts.some((alt) => unavailableAsins.has(alt)) ||
+              item.parts.some((part) => unavailableNames.has(part)) ||
+              item.hrefs.some((href) =>
+                Array.from(unavailableAsins).some((asin) =>
+                  new RegExp(`/(?:dp|gp/product)/${asin}(?:[/?]|$)`).test(href),
+                ),
+              ),
+          )
+        )
+          abort("NOW_ITEM_OWNERSHIP_INVALID");
+        if (
           selectedOrderScope &&
           nodes.some(
             (el) =>
@@ -1555,23 +1790,8 @@ async function readNowDom(
             return abort();
           const raw = (el: Element): string =>
             el.textContent?.replace(/\s+/g, " ").trim() ?? "";
-          const historical = (el: Element): Element | undefined => {
-            let result: Element | undefined;
-            for (
-              let node: Element | null = el;
-              node && node !== root;
-              node = node.parentElement
-            )
-              if (
-                ["S", "DEL", "STRIKE"].includes(node.tagName) ||
-                view
-                  .getComputedStyle(node)
-                  .textDecorationLine.includes("line-through")
-              )
-                result = node;
-            return result;
-          };
           const comparison = (el: Element): boolean => {
+            if (billRoot.contains(el)) return billComparison(el, true);
             const old = historical(el);
             const parent = old?.parentElement;
             if (
@@ -1586,25 +1806,7 @@ async function readNowDom(
             // same minimal field/label-bound bill row as its current value.
             const owner =
               row.contains(parent) && itemText(parent) === prices[0];
-            const billOwners = [...billRegions].filter((region) =>
-              region.contains(old),
-            );
-            if (billOwners.length > 1) return false;
-            let field: Element | undefined = owner ? parent : undefined;
-            // Bill comparisons may have layout wrappers. Only a unique,
-            // independently label-bound row within five parent steps may own
-            // one; billRoot membership alone never supplies ownership.
-            for (
-              let scope: Element | null = parent, depth = 0;
-              !field &&
-              billOwners.length === 1 &&
-              scope &&
-              scope !== billRoot &&
-              depth < 5;
-              scope = scope.parentElement, depth++
-            ) {
-              if (scope === billOwners[0]) field = scope;
-            }
+            const field = owner ? parent : undefined;
             return (
               !!field &&
               elements(field).filter(

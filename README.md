@@ -186,7 +186,11 @@ their merchandise or amounts coincide. Any failure preserves prior complete JSON
 
 The selected-order bill guard collapses a composite ancestor match only when a
 matching descendant contains its sole occurrence of that declaration label.
-The raw dialog must also contain exactly one occurrence of each required label;
+The unfiltered dialog must also contain exactly one occurrence of each required label,
+counted with boundaries between DOM text nodes. Thus adjacent `You pay` and
+`Inclusive of taxes` elements do not erase the label's trailing word boundary.
+The original raw declaration candidates still authorize labels; the boundary scan
+cannot invent a missing declaration. Composite collapse uses the same boundary count;
 independent repeated text, including fragmented or hidden text in an ancestor,
 cannot disappear. Visibility filtering and matching amounts never authorize
 deduplication. Bill regions containing or enclosed by semantic merchandise/list
@@ -194,9 +198,27 @@ boundaries, product links or quantity signals fail closed. Every bill image/icon
 must belong to the existing strictly bounded `Free for` handling-fee annotation;
 unowned images and product identifiers are rejected, including hidden images.
 The [bill ownership notes](docs/amazon-now-bill-ownership-diagnostic.md) explain
-the correction and its limits. The owner's broad merchandise-collision flag
-does not establish whether their live scope satisfies these checks. Live
-compatibility remains unverified; no collision is assumed harmless.
+the correction and its limits. A visible strike-through bill comparison is permitted
+only inside one independently label-bound row reached within five parent steps.
+Each owning row may contain only one comparison; it never supplies the effective
+amount, a discount or a refund. Hidden amounts/text, historical labels, unowned
+comparisons, duplicate comparisons and unknown charges remain rejected.
+The corrected implementation has synthetic offline coverage; successful extraction
+of an owner account still requires separate authorized live validation.
+
+The alternate `View details` path additionally supports one narrowly recognized
+**Out of Stock Items** region, separate from fulfilled rows and the bill. Its
+entire current boundary must contain only a heading, complete unpriced image/name/
+package rows and the independently owned `Refund for these items initiated` notice
+with its bounded icon and explanatory timing text. The observed unavailable package
+form is `Pack of N, M Pcs`, a literal period and a separate explicit purchased-unit
+count; all counts must be positive canonical safe integers. None supplies a price.
+Priced, hidden, incomplete, duplicated or conflicting unavailable rows, controls,
+product links, ambiguous status evidence and overlapping active identities reject
+the region. Only proven unavailable merchandise is omitted. Fulfilled line and
+unit counts, Items total, reconciliation and exact listed You pay agreement still
+have to pass. No refund amount or settlement history is inferred. Other refund and
+cancellation layouts remain unsupported.
 
 Fictional offline fixtures exercise a shared interface whose two original links
 automatically select separate seven-line and one-line orders, with independent
@@ -248,6 +270,13 @@ inside the three fields. Product-name punctuation is preserved. Flat snapshot
 fragments alone cannot prove this structure and are still rejected by the pure
 parser; its name and quantity grammars are unchanged. Hiding or striking through
 both metadata fields cannot make the row fall back to a bare purchased count.
+
+The descriptor can also be a plain gram range, exactly `lower-upper g` with an
+ASCII hyphen. Both endpoints use positive canonical decimal syntax and must be
+strictly increasing when compared as decimal strings. The same adjacent literal
+period and explicit purchased-unit proof applies. Weights never become quantities;
+equal/decreasing ranges, alternate punctuation/units and unproven flat fragments
+remain rejected.
 
 The same bounded structure also supports exactly `Pack of N, M Tablets` as its
 descriptor, using the fixed capitalization and ASCII comma after existing
@@ -372,8 +401,9 @@ caption is accepted only in its own bounded caption/icon group; the row must
 still declare a separate,
 unambiguous effective **Free** or INR charge. The caption cannot replace a missing
 charge or hide conflicting current values. Discounts/promotions remain separate
-rows with explicit negative INR amounts. Included/qualified fees, refunds,
-Now cancellations, unknown bill rows, ambiguous prices and unsupported layouts
+rows with explicit negative INR amounts. Included/qualified fees, refunds outside
+the narrowly validated unavailable-item region, Now cancellations, unknown bill rows,
+ambiguous prices and unsupported layouts
 stop export. Separate funding sections never supply totals or adjustments.
 Now items use `amazon-now-order-details` provenance and adjustments use
 `amazon-now-bill-summary`; the JSON field structure and one-paise reconciliation
@@ -417,6 +447,16 @@ conflicting identities and cancellation/refund markers prevent classification.
 The current card must have one complete matching order ID; existing date parsing
 and any declared header-total validation remain required. The classifier makes
 no request to wallet/detail pages and adds no wallet financial export.
+
+Outside-block text accounting ignores only non-rendered `SCRIPT`/`STYLE` source,
+including its contribution to ancestor wrappers. Ordinary hidden content is still
+checked. One completely empty inactive actions scaffold may be accounted for only
+in the verified right-column sibling of the funding block: an empty action list,
+empty collapsed pane, hidden toggle, one inert `javascript:void(0)` anchor and one
+exact `More options` prompt. The complete shape, same-card ownership and absence
+of extra content are required. Nonempty/active/misplaced widgets, arbitrary hidden
+text and genuine merchandise remain uncertain. No broad column, class, amount,
+identifier or label-only exemption authorizes funding exclusion.
 
 Unknown or ambiguous records retain normal strict selection and extraction.
 Products mentioning Amazon Pay Wallet and genuine purchases paid with wallet

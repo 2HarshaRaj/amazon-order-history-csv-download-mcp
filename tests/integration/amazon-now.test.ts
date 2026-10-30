@@ -1051,7 +1051,7 @@ const splitPackageCases: [string, string][] = [
     "400 oz",
     "400",
     "g",
-    "400-500 g",
+    "500-400 g",
     "Approx. 400 g",
     "four hundred g",
     "400 g extra",

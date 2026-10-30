@@ -199,15 +199,137 @@ export async function classifyWalletFundingCard(
         // Merchandise/payment context outside the recognized block is uncertain.
         const headers =
           '.order-header, .order-info, [data-component="orderHeader"]';
+        // Code is not card content. Exclude only non-rendered SCRIPT/STYLE
+        // source, recursively: filtering the source nodes alone leaves their
+        // text in every enclosing layout wrapper. Hidden ordinary text remains.
+        const code = (el: Element): boolean =>
+          ["SCRIPT", "STYLE"].includes(el.tagName) &&
+          view.getComputedStyle(el).display === "none" &&
+          el.getClientRects().length === 0;
+        const omitted = new Set<Element>();
+        const outsideText = (el: Element): string =>
+          code(el) || omitted.has(el)
+            ? ""
+            : Array.from(el.childNodes)
+                .map((node) =>
+                  node.nodeType === 3
+                    ? (node.textContent ?? "")
+                    : node.nodeType === 1
+                      ? outsideText(node as Element)
+                      : "",
+                )
+                .join(" ")
+                .replace(/\s+/g, " ")
+                .trim();
+        const children = (el: Element): Element[] =>
+          Array.from(el.children).filter((child) => !code(child));
+        const noDirectText = (el: Element): boolean =>
+          !Array.from(el.childNodes).some(
+            (node) => node.nodeType === 3 && node.textContent?.trim(),
+          );
+        const widgets = nodes.filter((el) =>
+          el.classList.contains("yo-collapsible-actions"),
+        );
+        if (widgets.length) {
+          if (widgets.length !== 1) return false;
+          const widget = widgets[0],
+            stack = widget.parentElement;
+          const sidebar = stack?.parentElement,
+            frame = block.parentElement;
+          if (
+            !stack ||
+            !sidebar ||
+            !frame ||
+            frame.tagName !== "DIV" ||
+            !frame.classList.contains("a-fixed-right-grid-inner") ||
+            frame.children.length !== 2 ||
+            frame.children[0] !== block ||
+            frame.children[1] !== sidebar ||
+            sidebar.tagName !== "DIV" ||
+            !sidebar.classList.contains("a-fixed-right-grid-col") ||
+            !sidebar.classList.contains("a-col-right") ||
+            sidebar.closest(headers) ||
+            stack.tagName !== "DIV" ||
+            !stack.classList.contains("a-button-stack") ||
+            children(sidebar).length !== 1 ||
+            children(sidebar)[0] !== stack ||
+            children(stack).length !== 1 ||
+            children(stack)[0] !== widget ||
+            widget.tagName !== "DIV" ||
+            !widget.classList.contains("yo-collapsible-actions--expanded") ||
+            ![frame, sidebar, stack, widget].every(
+              (el) => owned(el) && current(el) && noDirectText(el),
+            ) ||
+            block.contains(widget) ||
+            sidebar.contains(block)
+          )
+            return false;
+          const [list, toggle] = children(widget);
+          if (
+            children(widget).length !== 2 ||
+            !list ||
+            !toggle ||
+            list.tagName !== "UL" ||
+            !list.classList.contains("yo-collapsible-actions__list") ||
+            list.getAttribute("role") !== "list" ||
+            list.children.length ||
+            raw(list) ||
+            toggle.tagName !== "DIV" ||
+            !toggle.classList.contains("yo-collapsible-actions__toggle") ||
+            view.getComputedStyle(toggle).display !== "none" ||
+            toggle.children.length !== 1 ||
+            !noDirectText(toggle)
+          )
+            return false;
+          const expander = toggle.children[0];
+          const [pane, anchor] = Array.from(expander.children);
+          if (
+            expander.tagName !== "DIV" ||
+            !expander.classList.contains("yo-collapsible-actions__expander") ||
+            expander.children.length !== 2 ||
+            !noDirectText(expander) ||
+            !pane ||
+            !anchor ||
+            pane.tagName !== "DIV" ||
+            !pane.classList.contains("a-expander-content") ||
+            pane.getAttribute("aria-expanded") !== "false" ||
+            view.getComputedStyle(pane).display !== "none" ||
+            pane.children.length ||
+            raw(pane) ||
+            anchor.tagName !== "A" ||
+            anchor.getAttribute("href") !== "javascript:void(0)" ||
+            anchor.getAttribute("data-action") !== "a-expander-toggle" ||
+            anchor.children.length !== 2 ||
+            !noDirectText(anchor)
+          )
+            return false;
+          const [icon, prompt] = Array.from(anchor.children);
+          if (
+            icon.tagName !== "I" ||
+            !icon.classList.contains("a-icon-extender-expand") ||
+            icon.children.length ||
+            raw(icon) ||
+            prompt.tagName !== "SPAN" ||
+            !prompt.classList.contains("a-expander-prompt") ||
+            prompt.children.length ||
+            raw(prompt) !== "More options" ||
+            [widget, ...Array.from(widget.querySelectorAll("*"))].some(
+              (el) => !owned(el),
+            )
+          )
+            return false;
+          omitted.add(widget);
+        }
         if (
           nodes.some(
             (el) =>
               !block.contains(el) &&
               !el.contains(block) &&
               !el.closest(headers) &&
-              raw(el) &&
-              raw(el) !== expected &&
-              raw(el) !== `Order # ${expected}`,
+              !Array.from(omitted).some((scope) => scope.contains(el)) &&
+              outsideText(el) &&
+              outsideText(el) !== expected &&
+              outsideText(el) !== `Order # ${expected}`,
           )
         )
           return false;
