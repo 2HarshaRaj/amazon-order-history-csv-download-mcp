@@ -184,13 +184,19 @@ A second order's items or bill cannot supply missing facts. Duplicate selected
 order IDs are rejected at JSON validation; different IDs are retained even when
 their merchandise or amounts coincide. Any failure preserves prior complete JSON.
 
-The current owner-local bill diagnostic found multiple raw `Items total` matches
-in the selected dialog before the bounded bill owner was established. Their
-individual ownership and currentness are unknown. The implementation remains
-unchanged: neither hidden matches nor matches outside a candidate bill may be
-silently discarded. The [bill ownership diagnostic proposal](docs/amazon-now-bill-ownership-diagnostic.md)
-defines the missing categorical evidence and one minimal, separately authorized
-owner-local check. It is a proposal, not a live test or an extraction correction.
+The selected-order bill guard collapses a composite ancestor match only when a
+matching descendant contains its sole occurrence of that declaration label.
+The raw dialog must also contain exactly one occurrence of each required label;
+independent repeated text, including fragmented or hidden text in an ancestor,
+cannot disappear. Visibility filtering and matching amounts never authorize
+deduplication. Bill regions containing or enclosed by semantic merchandise/list
+boundaries, product links or quantity signals fail closed. Every bill image/icon
+must belong to the existing strictly bounded `Free for` handling-fee annotation;
+unowned images and product identifiers are rejected, including hidden images.
+The [bill ownership notes](docs/amazon-now-bill-ownership-diagnostic.md) explain
+the correction and its limits. The owner's broad merchandise-collision flag
+does not establish whether their live scope satisfies these checks. Live
+compatibility remains unverified; no collision is assumed harmless.
 
 Fictional offline fixtures exercise a shared interface whose two original links
 automatically select separate seven-line and one-line orders, with independent

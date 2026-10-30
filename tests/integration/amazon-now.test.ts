@@ -38,6 +38,10 @@ const splitDelivery = readFileSync(
   join(__dirname, "fixtures/amazon-now-split-delivery.html"),
   "utf8",
 );
+const nestedDeclarations = readFileSync(
+  join(__dirname, "fixtures/amazon-now-nested-declarations.html"),
+  "utf8",
+);
 const sharedTracking = readFileSync(
   join(__dirname, "fixtures/amazon-now-shared-tracking.html"),
   "utf8",
@@ -1769,6 +1773,286 @@ browserTests("integrated Amazon Now extraction", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  test.each([
+    "nested",
+    "deep",
+    "split label",
+    "annotation image",
+    "ordinary action",
+    "nested You pay",
+  ])(
+    "bill declaration ownership accepts proven composites: %s",
+    async (mode) => {
+      const mutation = {
+        nested: "",
+        deep: `const inner=document.querySelector('#nested-inner');for(let i=0;i<20;i++){const wrap=document.createElement('div');while(inner.firstChild)wrap.append(inner.firstChild);inner.append(wrap)}`,
+        "split label": `document.querySelector('#nested-items-total').innerHTML='<span>Items <b>total</b></span><span>₹28.00</span>'`,
+        "annotation image": `document.querySelector('#nested-annotation svg').outerHTML='<img alt="Fictional membership mark" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==">'`,
+        "ordinary action": `document.querySelector('#split-action').textContent='View order details'`,
+        "nested You pay": `document.querySelector('#nested-outer').prepend(document.querySelector('#nested-you-pay'))`,
+      }[mode];
+      html =
+        nestedDeclarations +
+        `<script>${mutation};document.currentScript.remove()</script>`;
+      const detail = await extractNowOrder(
+        page,
+        id,
+        outer,
+        async () => {},
+        undefined,
+        { amount: 30, currency: "INR" },
+      );
+      expect(detail.items.map((item) => item.productName)).toEqual([
+        "Invented split lentils",
+        "Invented split rice",
+      ]);
+      expect(detail.items.map((item) => item.quantity)).toEqual([1, 1]);
+      expect(detail.items.map((item) => item.itemTotal.amount)).toEqual([
+        11, 17,
+      ]);
+      expect(detail.orderTotal?.amount).toBe(30);
+      expect(
+        detail.adjustments.map((adjustment) => adjustment.amount?.amount),
+      ).toEqual([2]);
+      expect(
+        await page.locator("#split-action").getAttribute("data-clicks"),
+      ).toBe("1");
+      // Verify that the invented fixture actually exercises the old overcount.
+      const evidence = await page.locator("#split-bill").evaluate((bill) => {
+        const raw = (el: Element): string =>
+          el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+        const nodes = [bill, ...Array.from(bill.querySelectorAll("*"))];
+        return {
+          matches: nodes.filter(
+            (el) =>
+              /^Items total\b/i.test(raw(el)) &&
+              !Array.from(el.children).some((child) => raw(child) === raw(el)),
+          ).length,
+          hasIcon: !!bill.querySelector("img, svg"),
+        };
+      });
+      expect(evidence).toEqual({
+        matches: mode === "split label" ? 5 : mode === "nested You pay" ? 3 : 4,
+        hasIcon: true,
+      });
+      const saved = createExportDocument(
+        options,
+        1,
+        [
+          {
+            summary: {
+              orderId: id,
+              orderDate: "2026-10-01",
+              nowDetailUrl: outer,
+            },
+            detail,
+          },
+        ],
+        new Date().toISOString(),
+      );
+      expect(saved.orders[0].items.map((item) => item.lineIndex)).toEqual([
+        0, 1,
+      ]);
+    },
+  );
+
+  const billOwnershipFailures: Array<[string, string]> = [
+    [
+      "hidden fee label without amount",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('beforeend','<div hidden>Handling fee</div>')`,
+    ],
+    [
+      "historical fragmented discount label without amount",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('beforeend','<s><span>Dis</span><span>count</span></s>')`,
+    ],
+    [
+      "unspaced fragmented dialog label",
+      `document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','<span>Items</span><span>total</span>')`,
+    ],
+    [
+      "hidden unspaced fragmented dialog label",
+      `document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','<div hidden><span>Items</span><span>total</span></div>')`,
+    ],
+    [
+      "historical unspaced fragmented dialog label",
+      `document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','<s><span>Items</span><span>total</span></s>')`,
+    ],
+    [
+      "independent ancestor prefix",
+      `document.querySelector('#nested-inner').prepend('Items total ₹28.00')`,
+    ],
+    [
+      "independent ancestor suffix",
+      `document.querySelector('#nested-inner').append('Items total ₹28.00')`,
+    ],
+    [
+      "fragmented ancestor suffix",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('beforeend','Items <b>total</b> ₹28.00')`,
+    ],
+    [
+      "direct dialog suffix",
+      `document.querySelector('#split-sheet').append('Items total ₹28.00')`,
+    ],
+    [
+      "fragmented dialog suffix",
+      `document.querySelector('#split-sheet').insertAdjacentHTML('beforeend','Items <b>total</b> ₹28.00')`,
+    ],
+    [
+      "duplicate bill row",
+      `document.querySelector('#nested-inner').append(document.querySelector('#nested-items-total').cloneNode(true))`,
+    ],
+    [
+      "hidden duplicate",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('beforeend','<div hidden>Items total ₹28.00</div>')`,
+    ],
+    [
+      "historical duplicate",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('beforeend','<s>Items total ₹28.00</s>')`,
+    ],
+    [
+      "hidden ancestor prefix",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('afterbegin','<span hidden>Items total ₹28.00</span>')`,
+    ],
+    [
+      "historical ancestor suffix",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('beforeend','<span style="text-decoration:line-through">Items total ₹28.00</span>')`,
+    ],
+    [
+      "noncurrent sole declaration",
+      `document.querySelector('#nested-items-total').hidden=true`,
+    ],
+    [
+      "conflicting declaration",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('beforeend','<div>Items total ₹29.00</div>')`,
+    ],
+    [
+      "wrong Items total",
+      `document.querySelector('#nested-items-total span').textContent='₹29.00'`,
+    ],
+    [
+      "wrong You pay",
+      `document.querySelector('#nested-you-pay span').textContent='₹31.00'`,
+    ],
+    [
+      "duplicate You pay",
+      `document.querySelector('#nested-outer').append('You pay ₹30.00')`,
+    ],
+    [
+      "hidden You pay",
+      `document.querySelector('#nested-outer').insertAdjacentHTML('beforeend','<span hidden>You pay ₹30.00</span>')`,
+    ],
+    [
+      "second bill",
+      `document.querySelector('#split-sheet').append(document.querySelector('#split-bill').cloneNode(true))`,
+    ],
+    [
+      "hidden second bill",
+      `const bill=document.querySelector('#split-bill').cloneNode(true);bill.hidden=true;document.querySelector('#split-sheet').append(bill)`,
+    ],
+    [
+      "hidden second heading",
+      `document.querySelector('#split-bill').insertAdjacentHTML('beforeend','<h2 hidden>Bill summary</h2>')`,
+    ],
+    [
+      "wrong bill order",
+      `document.querySelector('#split-bill').setAttribute('data-order-id','111-2222222-4444444')`,
+    ],
+    [
+      "bill contains genuine merchandise",
+      `document.querySelector('#split-bill').append(document.querySelector('#split-items'))`,
+    ],
+    [
+      "bill row contains genuine merchandise",
+      `document.querySelector('#nested-items-total').append(document.querySelector('#split-row-1'))`,
+    ],
+    [
+      "merchandise boundary wraps bill",
+      `const row=document.createElement('article');document.querySelector('#split-bill').before(row);row.append(document.querySelector('#split-bill'))`,
+    ],
+    [
+      "incomplete semantic item",
+      `document.querySelector('#split-bill').insertAdjacentHTML('beforeend','<article></article>')`,
+    ],
+    [
+      "list boundary in bill",
+      `document.querySelector('#split-bill').insertAdjacentHTML('beforeend','<div role="listitem"></div>')`,
+    ],
+    [
+      "product image inside financial row",
+      `document.querySelector('#nested-items-total').append(document.querySelector('#split-row-1 img').cloneNode(true))`,
+    ],
+    [
+      "presentation product image",
+      `const img=document.querySelector('#split-row-1 img').cloneNode(true);img.setAttribute('role','presentation');document.querySelector('#nested-items-total').append(img)`,
+    ],
+    [
+      "hidden product image",
+      `const img=document.querySelector('#split-row-1 img').cloneNode(true);img.hidden=true;document.querySelector('#nested-items-total').append(img)`,
+    ],
+    [
+      "product link in financial row",
+      `document.querySelector('#nested-items-total').insertAdjacentHTML('beforeend','<a href="/dp/B0SPLT0001"></a>')`,
+    ],
+    [
+      "quantity in financial row",
+      `document.querySelector('#nested-items-total').insertAdjacentHTML('beforeend','<span>Qty: 1</span>')`,
+    ],
+    [
+      "unowned non-ASIN image",
+      `document.querySelector('#nested-you-pay').insertAdjacentHTML('beforeend','<img alt="Fictional unexplained icon">')`,
+    ],
+    [
+      "annotation has product identifier",
+      `document.querySelector('#nested-annotation svg').outerHTML='<img alt="B0SPLT0001">'`,
+    ],
+    [
+      "annotation contains control",
+      `document.querySelector('#nested-annotation').insertAdjacentHTML('beforeend','<button></button>')`,
+    ],
+    [
+      "annotation has second icon",
+      `document.querySelector('#nested-annotation').append(document.querySelector('#nested-annotation svg').cloneNode(true))`,
+    ],
+    [
+      "annotation hidden extra text",
+      `document.querySelector('#nested-annotation').insertAdjacentHTML('beforeend','<span hidden>Invented hidden fact</span>')`,
+    ],
+    [
+      "duplicate signed adjustment",
+      `document.querySelector('#nested-inner').insertAdjacentHTML('beforeend','<div>Handling fee ₹2.00</div>')`,
+    ],
+  ];
+  test.each(billOwnershipFailures)(
+    "bill declaration ownership rejects %s and preserves prior JSON",
+    async (_name, mutation) => {
+      html =
+        nestedDeclarations +
+        `<script>${mutation};document.currentScript.remove()</script>`;
+      listHtml = list.replace("₹230.00", "₹30.00");
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await mkdtemp(join(tmpdir(), "now-bill-ownership-"));
+      const output = join(directory, "orders.json");
+      await writeFile(output, "previous complete export");
+      try {
+        await expect(
+          runExport({ ...options, output }, () => {}, {
+            list: listOrders,
+            extract: extractOrderItems,
+            write: validateAndWriteExport,
+            report: async () => {},
+            cleanup: async () => {},
+          }),
+        ).rejects.toThrow();
+        expect(await readFile(output, "utf8")).toBe("previous complete export");
+        expect(await readdir(directory)).toEqual(["orders.json"]);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   const secondId = "111-2222222-4444444";
   const prepareShared = async (mutation = ""): Promise<void> => {

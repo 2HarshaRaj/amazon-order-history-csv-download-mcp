@@ -616,13 +616,43 @@ async function readNowDom(
             )
           )
             abort("NOW_DIALOG_IDENTITY_INVALID");
+          // Discovery only: textContent concatenates sibling elements without
+          // spaces. Also inspect raw text-node boundaries so an independent
+          // split label cannot hide outside the candidate bill, even if hidden
+          // or historical. This never authorizes a label absent from rawLeaves.
+          const rawParts: string[] = [];
+          const walker = root.ownerDocument.createTreeWalker(root, 4);
+          while (walker.nextNode())
+            rawParts.push(walker.currentNode.textContent ?? "");
+          const separatedRaw = rawParts.join(" ").replace(/\s+/g, " ").trim();
           for (const label of [
             /^Items total\b/i,
             /^You pay\b/i,
             /^Bill summary$/i,
           ]) {
-            const declarations = rawLeaves.filter((el) => label.test(raw(el)));
-            if (declarations.length !== 1 || !current(declarations[0]))
+            const candidates = rawLeaves.filter((el) => label.test(raw(el)));
+            // A composite may start with its descendant's declaration and also
+            // contain sibling rows. Collapse it only when the descendant owns
+            // its sole occurrence of this label. Independent text before/after
+            // that descendant (including hidden or fragmented text) stays fatal.
+            // No leading word boundary: adjacent DOM text may join two labels.
+            const occurrence = new RegExp(
+              label.source.replace(/^\^/, "").replace(/\$$/, ""),
+              "gi",
+            );
+            const declarations = candidates.filter(
+              (el) =>
+                (raw(el).match(occurrence) ?? []).length !== 1 ||
+                !candidates.some((child) => child !== el && el.contains(child)),
+            );
+            if (
+              declarations.length !== 1 ||
+              !current(declarations[0]) ||
+              // Include independently repeated text even when it follows an
+              // element in a composite, or is fragmented across sibling nodes.
+              (raw(root).match(occurrence) ?? []).length !== 1 ||
+              (separatedRaw.match(occurrence) ?? []).length !== 1
+            )
               abort("NOW_BILL_SUMMARY_INVALID");
           }
           if (
@@ -699,17 +729,30 @@ async function readNowDom(
         )
           return abort();
         const billRoot = bill;
+        // Establish this boundary before bill membership can exclude item facts.
+        // Even a financial-looking list remains unproven here; do not conceal
+        // semantic item rows, product links or raw purchased-quantity evidence.
+        if (
+          selectedOrderScope &&
+          (billRoot.closest('article, li, [role="list"], [role="listitem"]') ||
+            elements(billRoot).some(
+              (el) =>
+                el.matches(
+                  'article, li, [role="list"], [role="listitem"], a[href*="/dp/"], a[href*="/gp/product/"]',
+                ) ||
+                new RegExp(quantitySignalSource, "i").test(
+                  el.textContent?.replace(/\s+/g, " ").trim() ?? "",
+                ),
+            ))
+        )
+          abort("NOW_BILL_SUMMARY_INVALID");
         if (
           selectedOrderScope &&
           elements(billRoot).some(
             (el) =>
               !current(el) &&
               Array.from(el.childNodes).some(
-                (node) =>
-                  node.nodeType === 3 &&
-                  /₹|\bINR\b|\b(?:Items total|You pay)\b/i.test(
-                    node.textContent ?? "",
-                  ),
+                (node) => node.nodeType === 3 && node.textContent?.trim(),
               ),
           )
         )
@@ -727,6 +770,7 @@ async function readNowDom(
             ),
         );
         const billRegions = new Set<Element>();
+        const billAnnotationIcons = new Set<Element>();
         const billRows = labels.map((label) => {
           const name = billLabel.exec(text(label))?.[1];
           if (!name) return abort();
@@ -775,6 +819,22 @@ async function readNowDom(
             ) {
               if (!/^Free for$/i.test(text(annotation))) break;
               if (annotation.querySelectorAll("img, svg").length === 1) {
+                if (selectedOrderScope) {
+                  const icon = annotation.querySelector("img, svg");
+                  if (!icon) return abort();
+                  if (
+                    !/^Free for$/i.test(
+                      annotation.textContent?.replace(/\s+/g, " ").trim() ?? "",
+                    ) ||
+                    annotation.querySelector(
+                      'a, button, [role="button"], input, select, textarea',
+                    ) ||
+                    !rendered(icon, true) ||
+                    /\b[A-Z0-9]{10}\b/.test(icon.getAttribute("alt") ?? "")
+                  )
+                    return abort();
+                  billAnnotationIcons.add(icon);
+                }
                 bounded = true;
                 break;
               }
@@ -813,6 +873,16 @@ async function readNowDom(
             .trim();
         };
         if (uncovered(billRoot)) abort();
+        // Bill membership must not conceal merchandise images. Only the
+        // independently bounded annotation above can own an icon here. Inspect
+        // raw nodes too; hiding an image never supplies an exemption.
+        if (
+          selectedOrderScope &&
+          elements(billRoot).some(
+            (el) => el.matches("img, svg") && !billAnnotationIcons.has(el),
+          )
+        )
+          abort("NOW_BILL_SUMMARY_INVALID");
 
         checkpoints.push("NOW_ITEMS_FEES");
         reason = "NOW_ITEM_OWNERSHIP_INVALID";
