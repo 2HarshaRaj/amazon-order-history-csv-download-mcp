@@ -471,6 +471,27 @@ function needsPrintableProof(facts: NowSnapshot): boolean {
   });
 }
 
+/** Only an otherwise unsupported ordinary multi-row price can request the
+ * existing strict selected-dialog proof. Known prices/single-line paths stay put. */
+function ordinaryLineProofCandidate(facts: NowSnapshot): boolean {
+  return facts.items.length > 1 && facts.items.some(item => {
+    if (item.parts.length !== 3 || !QUANTITY_SIGNAL.test(item.parts[1]) ||
+        !/^(?:₹|INR\s+)\s*[\d,]+(?:\.\d{1,2})?$/.test(item.parts[2])) return false;
+    // Discovery must not replace the existing indexed parser/subreason for an
+    // invalid quantity. Such facts stay on the original fail-closed parser path.
+    try { return explicitQuantity(item.parts[1], () => fail("ITEM_FACTS_INVALID")) > 1; }
+    catch { return false; }
+  });
+}
+
+function sameOwnedFacts(first: NowSnapshot, second: NowSnapshot): boolean {
+  const core = (facts: NowSnapshot): string => JSON.stringify({
+    orderIds:facts.orderIds,billRows:facts.billRows,
+    items:facts.items.map(({parts,alts,hrefs})=>({parts,alts,hrefs})),
+  });
+  return core(first) === core(second);
+}
+
 /** One bounded reader for independent tracking identity and the active sheet.
  * No Amazon CSS classes or positional price/quantity assumptions are used.
  */
@@ -2303,13 +2324,24 @@ export async function extractNowOrder(
     await dialogs.first().waitFor({ state: "visible", timeout: TIMEOUT });
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     at("NOW_DIALOG_IDENTITY");
-    const facts = await readNowDom(
+    let strictDialog = actionProof !== undefined;
+    let facts = await readNowDom(
       dialogs.first(),
       orderId,
       "dialog",
       trace,
-      actionProof !== undefined,
+      strictDialog,
     );
+    if (!strictDialog && ordinaryLineProofCandidate(facts)) {
+      const initial = facts;
+      // The ordinary control supplies the same independently selected dialog.
+      // Reuse every strict count/identity/ownership/bill check before permitting
+      // the existing printable-backed fallback; never manufacture proof flags.
+      facts = await readNowDom(dialogs.first(),orderId,"dialog",trace,true);
+      if (!facts.declaredItemCountIsUnits || !sameOwnedFacts(initial,facts))
+        fail("ITEM_SHAPE_AMBIGUOUS");
+      strictDialog = true;
+    }
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
     at("NOW_PARSING");
@@ -2320,11 +2352,11 @@ export async function extractNowOrder(
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     validateNowUrl(page.url(),orderId,"/tez/browse/orderTracking");
     if (printable) {
-      const fresh = await readNowDom(dialogs.first(),orderId,"dialog",trace,actionProof !== undefined);
+      const fresh = await readNowDom(dialogs.first(),orderId,"dialog",trace,strictDialog);
       if (JSON.stringify(fresh) !== JSON.stringify(facts)) fail("ITEM_SHAPE_AMBIGUOUS");
     }
     const detail = parseNowSnapshot(facts, orderId, trace, printable);
-    if (actionProof !== undefined)
+    if (strictDialog)
       validateNowSelectedOrder(facts, detail, listedTotal);
     return detail;
   } catch (error) {

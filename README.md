@@ -230,6 +230,16 @@ validation and is never serialized. Items total, exact listed You pay agreement,
 full coverage and one-paise order reconciliation still have to pass before atomic
 publication. Confirmed unpriced cancellations retain their separate contract.
 
+The ordinary `View order details` control can reach this same qualified layout.
+Only an otherwise unsupported multi-row, multi-unit unqualified amount requests
+a second read with the existing strict selected-dialog reader. It must obtain
+the qualified purchased-unit declaration, pass every existing identity, ownership,
+bill and coverage check, and preserve the initial owned merchandise and financial
+facts before requesting printable corroboration. The strict dialog is revalidated
+afterward and must satisfy the same selected-order count and financial guards.
+No proof flags are synthesized. Existing known unit prices and the constrained
+single-line derivation path retain their original behavior.
+
 Consumer coordination is tracked in
 [personal-automation-library Issue #242](https://github.com/2HarshaRaj/personal-automation-library/issues/242).
 Consumers must explicitly accept this marker with null unit price and numeric

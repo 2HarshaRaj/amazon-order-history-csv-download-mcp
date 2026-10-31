@@ -40,6 +40,10 @@ const base = mutate(
 `,
 );
 const printBase = fixture("amazon-now-line-total-printable.html");
+const ordinaryBase = mutate(
+  base,
+  "document.querySelector('#unavailable').remove();document.querySelectorAll('#bill [decorationtype=strike]').forEach(e=>e.remove());document.querySelector('#handling>div:first-child>p:last-child').remove();document.querySelector('#you-pay>div:first-child>p').remove()",
+).replace(">View details<", ">View order details<");
 
 browserTests(
   "independently corroborated Amazon Now line-total-only items",
@@ -152,6 +156,100 @@ browserTests(
       expect(result.orderTotal.amount).toBe(31.01);
       expect(printRequests).toBe(1);
       expect(context.pages()).toHaveLength(1);
+    });
+    test("ordinary control reuses strict five-unit/four-row proof without deriving a unit price", async () => {
+      html = mutate(
+        ordinaryBase,
+        "for(const [suffix,name,amount]of [['04','Invented pen refill','2'],['05','Invented paper roll','3']]){const r=document.querySelector('#active-two').cloneNode(true);r.id='active-'+suffix;r.querySelector('img').alt='B0REC000'+suffix;r.querySelector('div>p').textContent=name;const price=r.lastElementChild.querySelector('p');price.setAttribute('aria-label','₹'+amount);price.lastElementChild.textContent=amount;document.querySelector('#fulfilled').append(r)}document.querySelector('#count').textContent='5 items in order';document.querySelector('#subtotal>div:last-child>p').textContent='₹36.01';document.querySelector('#you-pay>div:last-child>p').textContent='₹36.01'",
+      );
+      printed = mutate(
+        printBase,
+        "for(const [suffix,name,amount]of [['04','Fictional detailed pen title','2'],['05','Fictional detailed paper title','3']]){const r=document.querySelector('#owned-two').cloneNode(true);r.id='owned-'+suffix;r.querySelector('.a-span11>.a-row').id='printed-'+suffix;r.querySelector('img').alt=name;r.querySelector('a').textContent=name;r.querySelector('a').href='/dp/B0REC000'+suffix;r.querySelector('.a-span2').textContent='₹'+amount;document.querySelector('#printed-items').append(r,document.createElement('hr'))}",
+      );
+      const result = await extract(36.01);
+      expect(result.items).toHaveLength(4);
+      expect(result.items.map((i) => i.quantity)).toEqual([2, 1, 1, 1]);
+      expect(result.items[0]).toMatchObject({
+        unitPrice: undefined,
+        itemTotal: { amount: 13.01 },
+        extractionSource: NOW_LINE_TOTAL_ONLY,
+      });
+      expect(result.items.slice(1).map((i) => i.unitPrice?.amount)).toEqual([
+        18, 2, 3,
+      ]);
+      expect(printRequests).toBe(1);
+    });
+    test("ordinary known single-unit prices retain the legacy path without a count or printable request", async () => {
+      html = mutate(
+        ordinaryBase,
+        "document.querySelector('#range').innerHTML='1 Pc<span> . </span>1 unit';document.querySelector('#count').remove()",
+      );
+      const result = await extract();
+      expect(result.items[0].unitPrice?.amount).toBe(13.01);
+      expect(result.items[0].extractionSource).toBeUndefined();
+      expect(printRequests).toBe(0);
+    });
+    test.each([
+      ["missing qualified count", "document.querySelector('#count').remove()"],
+      [
+        "unqualified count",
+        "document.querySelector('#count').textContent='3 items'",
+      ],
+      [
+        "wrong unit count",
+        "document.querySelector('#count').textContent='2 items in order'",
+      ],
+      [
+        "duplicate count",
+        "document.querySelector('#fulfilled').insertAdjacentHTML('beforeend','<p>3 items in order</p>')",
+      ],
+      ["hidden count", "document.querySelector('#count').hidden=true"],
+      [
+        "incomplete row",
+        "document.querySelector('#fulfilled').insertAdjacentHTML('beforeend','<div role=listitem>Unaccounted merchandise</div>')",
+      ],
+      [
+        "hidden merchandise",
+        "document.querySelector('#fulfilled').insertAdjacentHTML('beforeend','<img hidden alt=B0REC99999>')",
+      ],
+      [
+        "hidden bill conflict",
+        "document.querySelector('#bill').insertAdjacentHTML('beforeend','<p hidden>You pay ₹31.01</p>')",
+      ],
+      [
+        "conflicting unit hint",
+        "document.querySelector('#active-one>div:last-child>p:first-child').title='Unit price ₹13.01'",
+      ],
+    ])("ordinary promotion rejects %s", async (_name, code) => {
+      html = mutate(ordinaryBase, code);
+      await expect(extract()).rejects.toBeInstanceOf(Error);
+    });
+    test.each([
+      [
+        "ASIN",
+        "document.querySelector('#printed-one a').href='/dp/B0REC99999'",
+      ],
+      [
+        "quantity",
+        "document.querySelector('#printed-one>.a-span1').textContent='1'",
+      ],
+      [
+        "gross line",
+        "document.querySelector('#printed-one>.a-span2').textContent='₹26.02'",
+      ],
+    ])(
+      "ordinary proof rejects printable %s disagreement",
+      async (_name, code) => {
+        html = ordinaryBase;
+        printed = mutate(printBase, code);
+        await expect(extract()).rejects.toBeInstanceOf(Error);
+      },
+    );
+    test("ordinary promoted dialog must remain unchanged during independent reading", async () => {
+      html = ordinaryBase;
+      sourceChange =
+        "document.querySelector('#count').textContent='4 items in order'";
+      await expect(extract()).rejects.toBeInstanceOf(Error);
     });
     test("corroborates multiple unknown-unit lines without inventing either unit price", async () => {
       html = mutate(
