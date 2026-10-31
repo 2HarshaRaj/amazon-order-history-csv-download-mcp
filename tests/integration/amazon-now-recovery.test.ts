@@ -1,8 +1,8 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Fictional fixtures only. Every request is intercepted; no persistent profile. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { readFile, rm, writeFile } from "fs/promises";
 import { join } from "path";
-import { tmpdir } from "os";
 import { Browser, BrowserContext, Page, chromium } from "playwright";
 import { extractNowOrder, parseNowSnapshot } from "../../src/poc/amazon-now";
 import { FailureDiagnostics } from "../../src/poc/failure-diagnostics";
@@ -407,7 +407,7 @@ browserTests("Amazon Now bounded recovery", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "synthetic-recovery-"));
+      const directory = await makeTestDirectory("synthetic-recovery-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       try {

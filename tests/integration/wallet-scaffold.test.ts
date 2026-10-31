@@ -1,7 +1,7 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Offline synthetic wallet ownership and non-content accounting regressions. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { Browser, BrowserContext, Page, chromium } from "playwright";
 import { classifyWalletFundingCard } from "../../src/poc/wallet-card-classification";
@@ -272,9 +272,7 @@ browserTests("wallet empty actions scaffold", () => {
     await page.setContent(html);
     expect((await parseCurrentOrderPage(page))[0].orderId).toBe(id);
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(
-      join(tmpdir(), "synthetic-wallet-scaffold-"),
-    );
+    const directory = await makeTestDirectory("synthetic-wallet-scaffold-");
     const output = join(directory, "orders.json");
     await writeFile(output, "prior complete export");
     try {

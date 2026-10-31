@@ -1,7 +1,7 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Owner-confirmed generic structure, entirely invented data, offline Chromium. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { Browser, BrowserContext, Page, chromium } from "playwright";
 import { classifyWalletFundingCard } from "../../src/poc/wallet-card-classification";
@@ -50,11 +50,12 @@ const options = {
   endDate: "2026-10-02",
   maxOrders: 2,
 };
+const sameRowBoundary = /<\/h3><\/a><\/div>\r?\n<div class="a-row">/;
 const uncertain: [string, string][] = [
-  [
-    "same a-row",
-    wallet.replace('</h3></a></div>\n<div class="a-row">', "</h3></a>"),
-  ],
+  ...(["\n", "\r\n"] as const).map((newline): [string, string] => [
+    `same a-row (${newline === "\n" ? "LF" : "CRLF"})`,
+    wallet.replace(/\r?\n/g, newline).replace(sameRowBoundary, "</h3></a>"),
+  ]),
   [
     "excessive evidence",
     wallet.replace(
@@ -288,8 +289,18 @@ browserTests("verified wallet funding classification", () => {
   });
   test.each(uncertain)(
     "uncertain %s remains selected and preserves atomic failure",
-    async (_name, fixture) => {
+    async (name, fixture) => {
       expect(fixture).not.toBe(wallet);
+      if (name.startsWith("same a-row")) {
+        const original = wallet.replace(
+          /\r?\n/g,
+          name.includes("CRLF") ? "\r\n" : "\n",
+        );
+        expect(original).toMatch(sameRowBoundary);
+        expect(fixture).not.toBe(original);
+        expect(fixture).not.toMatch(sameRowBoundary);
+        expect(fixture).toContain("</h3></a><div><span>Money added</span>");
+      }
       html = fixture;
       // Retention is observable independently from whichever strict detail rule fails.
       const selected = await parse(fixture);
@@ -298,7 +309,7 @@ browserTests("verified wallet funding classification", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "wallet-class-atomic-"));
+      const directory = await makeTestDirectory("wallet-class-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       try {
@@ -379,7 +390,7 @@ browserTests("verified wallet funding classification", () => {
     expect(result.orders).toEqual([]);
     expect(result.pagesScanned).toBe(1);
     expect(requests.some((url) => url.includes("order-details"))).toBe(false);
-    const directory = await mkdtemp(join(tmpdir(), "wallet-only-export-"));
+    const directory = await makeTestDirectory("wallet-only-export-");
     const output = join(directory, "orders.json");
     try {
       await runExport({ ...options, output }, () => {}, {
@@ -423,7 +434,7 @@ browserTests("verified wallet funding classification", () => {
           )
         ).orders.map((order) => order.orderId),
       ).toEqual([purchaseId]);
-      const directory = await mkdtemp(join(tmpdir(), "wallet-paid-export-"));
+      const directory = await makeTestDirectory("wallet-paid-export-");
       const output = join(directory, "orders.json");
       try {
         await runExport({ ...options, output }, () => {}, {
@@ -474,7 +485,7 @@ browserTests("verified wallet funding classification", () => {
   });
   test("verified exclusion publishes purchases only, preserving original names and total source", async () => {
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "wallet-class-export-"));
+    const directory = await makeTestDirectory("wallet-class-export-");
     const output = join(directory, "orders.json");
     try {
       await runExport({ ...options, output }, () => {}, {
@@ -497,7 +508,7 @@ browserTests("verified wallet funding classification", () => {
   test("excluded counts persist without funding identities or amounts", async () => {
     const trace = new FailureDiagnostics();
     await parse(wallet, trace);
-    const directory = await mkdtemp(join(tmpdir(), "wallet-class-report-"));
+    const directory = await makeTestDirectory("wallet-class-report-");
     try {
       await writeFailureReport(trace.report(new Error()), directory);
       const [file] = await readdir(directory);

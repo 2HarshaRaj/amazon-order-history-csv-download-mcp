@@ -1,9 +1,19 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Real Windows subprocesses, synthetic reports only; no Amazon/browser access. */
 import childProcess, { ChildProcess } from "child_process";
 import files from "fs/promises";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "fs/promises";
 import { tmpdir } from "os";
-import { basename, join, resolve, sep } from "path";
+import { basename, dirname, join, resolve, sep } from "path";
 import { promisify } from "util";
 import {
   FailureDiagnostics,
@@ -23,12 +33,12 @@ const importDesktop =
 windowsTests("Windows Desktop diagnostic persistence", () => {
   let directory: string;
   beforeEach(async () => {
-    directory = await mkdtemp(join(tmpdir(), "windows-diag-persistence-"));
+    directory = await makeTestDirectory("windows-diag-persistence-");
   });
   afterEach(async () => {
     jest.restoreAllMocks();
     if (
-      !resolve(directory).startsWith(resolve(tmpdir()) + sep) ||
+      !resolve(directory).startsWith(resolve(await realpath(tmpdir())) + sep) ||
       !basename(directory).startsWith("windows-diag-persistence-")
     )
       throw new Error(
@@ -196,6 +206,46 @@ $invalid=@($files | Where-Object {
       Files: 3,
       AllFilesOwnerOnly: true,
     });
+  });
+
+  test("rejects a noncanonical Windows alias without changing a prior report", async () => {
+    await writeFailureReport(syntheticReport(), directory);
+    const names = await readdir(directory);
+    const prior = await readFile(join(directory, names[0]), "utf8");
+    const temporaryAlias = join(tmpdir(), basename(directory));
+    // Exercise the real 8.3 TEMP alias when present, or a Windows case alias.
+    const alias =
+      temporaryAlias !== directory
+        ? temporaryAlias
+        : join(dirname(directory), basename(directory).toUpperCase());
+    expect(alias).not.toBe(directory);
+    expect(await realpath(alias)).toBe(directory);
+    const open = jest.spyOn(files, "open");
+    try {
+      await expect(
+        writeFailureReport(syntheticReport(), alias),
+      ).rejects.toThrow("Unsafe diagnostic directory.");
+      expect(open).not.toHaveBeenCalled();
+      expect(await readdir(directory)).toEqual(names);
+      expect(await readFile(join(directory, names[0]), "utf8")).toBe(prior);
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  test("rejects a Windows junction ancestor without publishing in its target", async () => {
+    const target = join(directory, "target");
+    const junction = join(directory, "junction");
+    await mkdir(target);
+    await symlink(target, junction, "junction");
+    try {
+      await expect(
+        writeFailureReport(syntheticReport(), join(junction, "reports")),
+      ).rejects.toThrow("Unsafe");
+      expect(await readdir(target)).toEqual([]);
+    } finally {
+      await unlink(junction);
+    }
   });
 
   test.each(["missing", "throws", "persistence"])(

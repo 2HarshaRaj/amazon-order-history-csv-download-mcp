@@ -1,7 +1,7 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Invented fixtures, ephemeral Chromium, every request intercepted. No Amazon access. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { chromium, Browser, BrowserContext, Page } from "playwright";
 import { extractNowOrder } from "../../src/poc/amazon-now";
@@ -1718,7 +1718,7 @@ browserTests("integrated Amazon Now extraction", () => {
     html = splitDelivery;
     listHtml = list.replace("₹230.00", "₹30.00");
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "now-deliveries-complete-"));
+    const directory = await makeTestDirectory("now-deliveries-complete-");
     const output = join(directory, "orders.json");
     try {
       await runExport({ ...options, output }, () => {}, {
@@ -2033,7 +2033,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-bill-ownership-"));
+      const directory = await makeTestDirectory("now-bill-ownership-");
       const output = join(directory, "orders.json");
       await writeFile(output, "previous complete export");
       try {
@@ -2104,7 +2104,7 @@ browserTests("integrated Amazon Now extraction", () => {
       ).toEqual({ tabs: 0, details: 1 });
       combined.push({ summary, detail });
     }
-    const directory = await mkdtemp(join(tmpdir(), "now-shared-complete-"));
+    const directory = await makeTestDirectory("now-shared-complete-");
     try {
       const output = join(directory, "orders.json");
       await validateAndWriteExport(
@@ -2188,7 +2188,7 @@ browserTests("integrated Amazon Now extraction", () => {
           "history.replaceState({},'',location.href.replace(ids[0],ids[1]))",
       };
       await prepareShared(mutations[mode] ?? "");
-      const directory = await mkdtemp(join(tmpdir(), "now-shared-failure-"));
+      const directory = await makeTestDirectory("now-shared-failure-");
       const output = join(directory, "orders.json");
       await writeFile(output, "previous complete export");
       const listDependency: typeof listOrders = async (...args) => {
@@ -2374,7 +2374,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-count-label-"));
+      const directory = await makeTestDirectory("now-count-label-");
       const output = join(directory, "orders.json");
       await writeFile(output, "previous complete export");
       try {
@@ -2692,9 +2692,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(
-        join(tmpdir(), "now-deliveries-failure-"),
-      );
+      const directory = await makeTestDirectory("now-deliveries-failure-");
       const output = join(directory, "orders.json");
       await writeFile(output, "previous complete export");
       const reports: unknown[] = [];
@@ -2837,9 +2835,7 @@ browserTests("integrated Amazon Now extraction", () => {
       itemTotal: { amount: 18.5 },
     });
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(
-      join(tmpdir(), "now-nested-bill-complete-"),
-    );
+    const directory = await makeTestDirectory("now-nested-bill-complete-");
     const output = join(directory, "orders.json");
     try {
       await runExport({ ...options, output }, () => {}, {
@@ -2900,9 +2896,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(
-        join(tmpdir(), "now-nested-bill-atomic-"),
-      );
+      const directory = await makeTestDirectory("now-nested-bill-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -2958,7 +2952,7 @@ browserTests("integrated Amazon Now extraction", () => {
       },
     ]);
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "now-single-complete-"));
+    const directory = await makeTestDirectory("now-single-complete-");
     const output = join(directory, "orders.json");
     try {
       await runExport({ ...options, output }, () => {}, {
@@ -3076,7 +3070,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-single-atomic-"));
+      const directory = await makeTestDirectory("now-single-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -3138,7 +3132,7 @@ browserTests("integrated Amazon Now extraction", () => {
       extractionSource: "amazon-now-order-details",
     });
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "now-grams-complete-"));
+    const directory = await makeTestDirectory("now-grams-complete-");
     const output = join(directory, "orders.json");
     try {
       await runExport({ ...options, output }, () => {}, {
@@ -3206,7 +3200,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-grams-atomic-"));
+      const directory = await makeTestDirectory("now-grams-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -3273,7 +3267,7 @@ browserTests("integrated Amazon Now extraction", () => {
       extractionSource: "amazon-now-order-details",
     });
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "now-pieces-complete-"));
+    const directory = await makeTestDirectory("now-pieces-complete-");
     const output = join(directory, "orders.json");
     try {
       await runExport({ ...options, output }, () => {}, {
@@ -3387,7 +3381,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-pieces-atomic-"));
+      const directory = await makeTestDirectory("now-pieces-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -3450,7 +3444,7 @@ browserTests("integrated Amazon Now extraction", () => {
       extractionSource: "amazon-now-order-details",
     });
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "now-tablet-complete-"));
+    const directory = await makeTestDirectory("now-tablet-complete-");
     const output = join(directory, "orders.json");
     try {
       await runExport({ ...options, output }, () => {}, {
@@ -3533,7 +3527,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-tablet-atomic-"));
+      const directory = await makeTestDirectory("now-tablet-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -3676,7 +3670,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-split-atomic-"));
+      const directory = await makeTestDirectory("now-split-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -3761,7 +3755,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-icon-atomic-"));
+      const directory = await makeTestDirectory("now-icon-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -3887,7 +3881,7 @@ browserTests("integrated Amazon Now extraction", () => {
   test("approximate-weight fixture publishes all 23 rows through the atomic JSON pipeline", async () => {
     html = splitPackagePrices;
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "now-approx-complete-"));
+    const directory = await makeTestDirectory("now-approx-complete-");
     const output = join(directory, "orders.json");
     const report = jest.fn(async () => {});
     try {
@@ -3995,7 +3989,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-approx-atomic-"));
+      const directory = await makeTestDirectory("now-approx-atomic-");
       const output = join(directory, "orders.json");
       const logs: string[] = [];
       await writeFile(output, "prior complete export");
@@ -4287,7 +4281,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-a11y-atomic-"));
+      const directory = await makeTestDirectory("now-a11y-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -4365,7 +4359,7 @@ browserTests("integrated Amazon Now extraction", () => {
       expect(report.items).toEqual([]);
       expect(report.adjustments).toEqual([]);
       expect(report.orderTotalSource).toBeUndefined();
-      const directory = await mkdtemp(join(tmpdir(), "now-ownership-report-"));
+      const directory = await makeTestDirectory("now-ownership-report-");
       try {
         await writeFailureReport(report, directory);
         const names = await readdir(directory);
@@ -4388,7 +4382,7 @@ browserTests("integrated Amazon Now extraction", () => {
   test("ownership failure preserves prior JSON and persists only its categorical additions", async () => {
     html = ownership.replace("<!-- decoration -->", "<div>₹1.00</div>");
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "now-ownership-atomic-"));
+    const directory = await makeTestDirectory("now-ownership-atomic-");
     const output = join(directory, "orders.json");
     const reports = join(directory, "reports");
     const logs: string[] = [];
@@ -4543,7 +4537,7 @@ browserTests("integrated Amazon Now extraction", () => {
         orderIndex: 2,
         category: "validation",
       });
-      const directory = await mkdtemp(join(tmpdir(), "now-dom-report-"));
+      const directory = await makeTestDirectory("now-dom-report-");
       try {
         await writeFailureReport(report, directory);
         const names = await readdir(directory);
@@ -4671,7 +4665,7 @@ browserTests("integrated Amazon Now extraction", () => {
           category: "validation",
         },
       ]);
-      const directory = await mkdtemp(join(tmpdir(), "now-parser-pipeline-"));
+      const directory = await makeTestDirectory("now-parser-pipeline-");
       const output = join(directory, "orders.json");
       const reports = join(directory, "reports");
       try {
@@ -4761,7 +4755,7 @@ browserTests("integrated Amazon Now extraction", () => {
       "<h2>Unsupported summary</h2>",
     );
     jest.spyOn(chromium, "launchPersistentContext").mockResolvedValue(context);
-    const directory = await mkdtemp(join(tmpdir(), "now-diagnostic-pipeline-"));
+    const directory = await makeTestDirectory("now-diagnostic-pipeline-");
     const output = join(directory, "orders.json");
     const reports = join(directory, "reports");
     await writeFile(output, "prior complete export");
@@ -5041,9 +5035,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(
-        join(tmpdir(), "now-compatibility-atomic-"),
-      );
+      const directory = await makeTestDirectory("now-compatibility-atomic-");
       const output = join(directory, "orders.json");
       const logs: string[] = [];
       try {
@@ -5408,9 +5400,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(
-        join(tmpdir(), "now-presentation-atomic-"),
-      );
+      const directory = await makeTestDirectory("now-presentation-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const logs: string[] = [];
@@ -5746,7 +5736,7 @@ browserTests("integrated Amazon Now extraction", () => {
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "now-atomic-"));
+      const directory = await makeTestDirectory("now-atomic-");
       const output = join(directory, "orders.json");
       await writeFile(output, "previous complete export");
       const logs: string[] = [];

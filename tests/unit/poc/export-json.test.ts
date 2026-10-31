@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, writeFile } from "fs/promises";
+import { makeTestDirectory } from "../../helpers/temp-directory";
+import { readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { tmpdir } from "os";
 import { join, win32 } from "path";
@@ -398,7 +399,7 @@ describe("POC JSON export contract", () => {
   });
 
   test("fails unexplained residual before replacing an existing destination", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "amazon-poc-test-"));
+    const directory = await makeTestDirectory("amazon-poc-test-");
     const output = join(directory, "orders.json");
     await writeFile(output, "unchanged", "utf8");
     const order = rawOrder("408-0000000-0000001");
@@ -433,7 +434,7 @@ describe("POC JSON export contract", () => {
   });
 
   test("writes valid UTF-8 JSON without sensitive fields", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "amazon-poc-test-"));
+    const directory = await makeTestDirectory("amazon-poc-test-");
     const output = join(directory, "nested", "orders.json");
     const document = createExportDocument(
       options,
@@ -450,7 +451,7 @@ describe("POC JSON export contract", () => {
   });
 
   test("fails validation before creating a file when a required price is missing", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "amazon-poc-test-"));
+    const directory = await makeTestDirectory("amazon-poc-test-");
     const output = join(directory, "not-created", "orders.json");
     const invalid = rawOrder("408-0000000-0000001");
     delete (
