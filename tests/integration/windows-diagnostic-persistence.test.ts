@@ -128,8 +128,78 @@ $c=Get-Command Set-Acl -ErrorAction Stop
     });
   });
 
-  test.each(["missing", "throws"])(
-    "a %s module import never reaches ACL work or report publication",
+  test("repeated writes retain protected owner-only ACLs and prior reports", async () => {
+    const root = join(directory, "repeated ' [literal]");
+    const reports = [syntheticReport(), syntheticReport(), syntheticReport()];
+    await writeFailureReport(reports[0], root);
+    const firstName = (await readdir(root))[0];
+    const firstBytes = await readFile(join(root, firstName), "utf8");
+    await writeFailureReport(reports[1], root);
+    await writeFailureReport(reports[2], root);
+    const names = await readdir(root);
+    expect(names).toHaveLength(3);
+    expect(names.every((name) => /^failure-.*\.json$/.test(name))).toBe(true);
+    expect(await readFile(join(root, firstName), "utf8")).toBe(firstBytes);
+    const stored = await Promise.all(
+      names.map(async (name) =>
+        JSON.parse(await readFile(join(root, name), "utf8")),
+      ),
+    );
+    expect(stored.map((report) => report.runId).sort()).toEqual(
+      reports.map((report) => report.runId).sort(),
+    );
+    const result = await execute(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        importDesktop +
+          `
+$u=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$root=$env:AMAZON_DIAGNOSTIC_ACL_PATH
+$directoryAcl=Get-Acl -LiteralPath $root -ErrorAction Stop
+$rules=@($directoryAcl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))
+$files=@(Get-ChildItem -LiteralPath $root -File)
+$invalid=@($files | Where-Object {
+  $acl=Get-Acl -LiteralPath $_.FullName -ErrorAction Stop
+  $access=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]))
+  $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $u.Value -or
+  $access.Count -ne 1 -or $access[0].IdentityReference.Value -ne $u.Value -or
+  $access[0].AccessControlType -ne 'Allow' -or
+  $access[0].FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl
+})
+[ordered]@{
+  OwnerIsCurrentUser=($directoryAcl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $u.Value)
+  Protected=$directoryAcl.AreAccessRulesProtected
+  Rules=$rules.Count
+  OwnerOnly=($rules.Count -eq 1 -and $rules[0].IdentityReference.Value -eq $u.Value -and $rules[0].AccessControlType -eq 'Allow' -and $rules[0].FileSystemRights -eq [System.Security.AccessControl.FileSystemRights]::FullControl)
+  ChildrenInherit=($rules[0].InheritanceFlags -eq [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit')
+  Files=$files.Count
+  AllFilesOwnerOnly=($invalid.Count -eq 0)
+} | ConvertTo-Json
+`,
+      ],
+      {
+        env: { ...process.env, AMAZON_DIAGNOSTIC_ACL_PATH: root },
+        encoding: "utf8",
+        timeout: 10000,
+        windowsHide: true,
+      },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({
+      OwnerIsCurrentUser: true,
+      Protected: true,
+      Rules: 1,
+      OwnerOnly: true,
+      ChildrenInherit: true,
+      Files: 3,
+      AllFilesOwnerOnly: true,
+    });
+  });
+
+  test.each(["missing", "throws", "persistence"])(
+    "%s failure prevents file opening and report publication",
     async (mode) => {
       const root = join(directory, "reports");
       // Start with an actually protected, valid report and retain it byte-for-byte.
@@ -149,10 +219,16 @@ $c=Get-Command Set-Acl -ErrorAction Stop
         ...args: unknown[]
       ): ChildProcess => {
         const commandArgs = [...(args[1] as string[])];
-        const replaced = commandArgs[3].replace(
-          /\(Join-Path \$PSHOME "Modules\\Microsoft\.PowerShell\.Security\\Microsoft\.PowerShell\.Security\.psd1"\)/,
-          "$env:SYNTHETIC_SECURITY_MODULE",
-        );
+        const replaced =
+          mode === "persistence"
+            ? commandArgs[3].replace(
+                "[System.IO.Directory]::SetAccessControl($env:AMAZON_DIAGNOSTIC_ACL_PATH,$a)",
+                "[System.IO.Directory]::SetAccessControl($null,$a)",
+              )
+            : commandArgs[3].replace(
+                /\(Join-Path \$PSHOME "Modules\\Microsoft\.PowerShell\.Security\\Microsoft\.PowerShell\.Security\.psd1"\)/,
+                "$env:SYNTHETIC_SECURITY_MODULE",
+              );
         expect(replaced).not.toBe(commandArgs[3]);
         commandArgs[3] = replaced.replace(
           "; $u=",
@@ -183,11 +259,15 @@ $c=Get-Command Set-Acl -ErrorAction Stop
         await expect(
           writeFailureReport(syntheticReport(), root),
         ).rejects.toMatchObject({ code: expect.any(Number) });
-        expect(stdout).not.toContain("SYNTHETIC_ACL_REACHED");
+        if (mode === "persistence")
+          expect(stdout).toContain("SYNTHETIC_ACL_REACHED");
+        else expect(stdout).not.toContain("SYNTHETIC_ACL_REACHED");
         expect(stderr).toContain(
           mode === "throws"
             ? "Synthetic module import failure"
-            : "missing.psd1",
+            : mode === "persistence"
+              ? "SetAccessControl"
+              : "missing.psd1",
         );
         expect(open).not.toHaveBeenCalled();
         expect(await readdir(root)).toEqual([previous]);

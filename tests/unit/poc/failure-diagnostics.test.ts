@@ -705,8 +705,9 @@ describe("owner-local report store", () => {
           '"FullControl","ContainerInherit,ObjectInherit","None","Allow"',
         );
         expect(args[3]).toContain(
-          "Set-Acl -LiteralPath $env:AMAZON_DIAGNOSTIC_ACL_PATH -AclObject $a -ErrorAction Stop",
+          "try { [System.IO.Directory]::SetAccessControl($env:AMAZON_DIAGNOSTIC_ACL_PATH,$a) } catch { throw }",
         );
+        expect(args[3]).not.toContain("Set-Acl");
         expect(exec.mock.calls[0][2]).toMatchObject({
           windowsHide: true,
           env: { AMAZON_DIAGNOSTIC_ACL_PATH: directory },

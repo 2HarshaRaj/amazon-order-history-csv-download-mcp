@@ -866,13 +866,15 @@ async function privateDirectory(directory: string): Promise<string> {
     // A PowerShell 7 -> Node parent can pass Core modules in PSModulePath.
     // Import this Desktop child's built-in module explicitly, failing closed.
     // Rethrow module errors so a script-module failure cannot resume at ACL work.
+    // Persist only our modified owner/DACL. Set-Acl copies auditing too and can
+    // require SeSecurityPrivilege when this directory is already protected.
     await promisify(execFile)(
       "powershell.exe",
       [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        'try { Import-Module (Join-Path $PSHOME "Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1") -ErrorAction Stop } catch { throw }; $u=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $a=New-Object System.Security.AccessControl.DirectorySecurity; $a.SetOwner($u); $a.SetAccessRuleProtection($true,$false); $r=New-Object System.Security.AccessControl.FileSystemAccessRule($u,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $a.AddAccessRule($r); Set-Acl -LiteralPath $env:AMAZON_DIAGNOSTIC_ACL_PATH -AclObject $a -ErrorAction Stop',
+        'try { Import-Module (Join-Path $PSHOME "Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1") -ErrorAction Stop } catch { throw }; $u=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $a=New-Object System.Security.AccessControl.DirectorySecurity; $a.SetOwner($u); $a.SetAccessRuleProtection($true,$false); $r=New-Object System.Security.AccessControl.FileSystemAccessRule($u,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $a.AddAccessRule($r); try { [System.IO.Directory]::SetAccessControl($env:AMAZON_DIAGNOSTIC_ACL_PATH,$a) } catch { throw }',
       ],
       {
         env: { ...process.env, AMAZON_DIAGNOSTIC_ACL_PATH: absolute },
