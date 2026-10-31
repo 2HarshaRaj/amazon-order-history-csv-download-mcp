@@ -688,6 +688,26 @@ describe("owner-local report store", () => {
           expect(await readdir(directory)).toHaveLength(1);
         }
         expect(exec.mock.calls[0][0]).toBe("powershell.exe");
+        const args = exec.mock.calls[0][1] as string[];
+        expect(args.slice(0, 4)).toEqual([
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          expect.stringContaining(
+            'try { Import-Module (Join-Path $PSHOME "Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1") -ErrorAction Stop } catch { throw }; $u=',
+          ),
+        ]);
+        expect(args).not.toContain("-ExecutionPolicy");
+        expect(args[3]).toContain(
+          "$a.SetOwner($u); $a.SetAccessRuleProtection($true,$false)",
+        );
+        expect(args[3]).toContain(
+          '"FullControl","ContainerInherit,ObjectInherit","None","Allow"',
+        );
+        expect(args[3]).toContain(
+          "try { [System.IO.Directory]::SetAccessControl($env:AMAZON_DIAGNOSTIC_ACL_PATH,$a) } catch { throw }",
+        );
+        expect(args[3]).not.toContain("Set-Acl");
         expect(exec.mock.calls[0][2]).toMatchObject({
           windowsHide: true,
           env: { AMAZON_DIAGNOSTIC_ACL_PATH: directory },

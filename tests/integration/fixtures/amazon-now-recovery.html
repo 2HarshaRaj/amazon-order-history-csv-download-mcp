@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8">
+<!-- Entirely fictional; exercises separately owned billed/unavailable regions. -->
+<style>img {width:20px;height:20px} [decorationtype=strike] {text-decoration:line-through}</style>
+<main><div><div><b>Order ID</b><span>111-2222222-3333333</span></div><button id="details" onclick="document.querySelector('#sheet').hidden=false">View details</button></div></main>
+<section role="dialog" id="sheet" hidden>
+<h1>Order Details</h1><div><b>Order ID</b><span>111-2222222-3333333</span></div>
+<div id="fulfilled"><p id="count">2 items in order</p>
+<div id="active-one"><span><img alt="B0REC00001" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></span><div><p>Invented range groceries</p><p id="range">123-157 g<span> . </span>1 unit</p></div><div><p aria-label="₹13"><span aria-hidden="true">₹</span><span aria-hidden="true">13</span></p><p decorationtype="strike">₹24</p></div></div>
+<div id="active-two"><span><img alt="B0REC00002" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></span><div><p>Invented bottled item</p><p>250 ml<span> . </span>1 unit</p></div><div><p aria-label="₹18"><span aria-hidden="true">₹</span><span aria-hidden="true">18</span></p></div></div>
+</div>
+<div id="unavailable"><p id="unavailable-heading">Out of Stock Items</p><div id="unavailable-products"><div id="unavailable-row"><span><img alt="B0REC00003" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></span><div><p>Invented unavailable stationery</p><p id="unavailable-package">Pack of 2, 6 Pcs<span> . </span>1 unit</p></div></div></div><div id="unavailable-notice"><img alt="refund-icon" role="img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="><div><p>Refund for these items initiated</p><p>It may take up to 3-5 business days for the refund to show in your account</p></div></div></div>
+<div id="bill"><p>Bill summary</p><div>
+<div id="subtotal"><div><p>Items total</p></div><div><span><p decorationtype="strike">₹60</p></span><p>₹31</p></div></div>
+<div id="handling"><div><p>Handling fee</p><p>Free for <img alt="" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></p></div><div><span><p decorationtype="strike">₹3</p></span><p>Free</p></div></div>
+<div id="delivery"><div><p>Delivery fee</p></div><div><span><p decorationtype="strike">₹4</p></span><p>Free</p></div></div>
+<div id="you-pay"><div><div><p>You pay</p></div><p>Inclusive of taxes</p></div><div><span><p decorationtype="strike">₹67</p></span><p>₹31</p></div></div>
+</div></div>
+<section><h2>Payment method</h2><p>Invented funding ₹31</p></section>
+</section>

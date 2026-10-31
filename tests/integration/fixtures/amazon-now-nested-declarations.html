@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8"><style>img {width:20px;height:20px} article {display:flex}</style>
+<!-- Entirely invented. Four nested raw prefix matches share one declaration. -->
+<main><div id="split-owner"><div id="split-id"><b>Order ID</b><span>111-2222222-3333333</span></div><button id="split-action" onclick="this.dataset.clicks=String(Number(this.dataset.clicks||0)+1);document.querySelector('#split-sheet').hidden=false">View details</button></div></main>
+<section role="dialog" id="split-sheet" hidden>
+<h1>Order Details</h1><div><b>Order ID</b><span>111-2222222-3333333</span></div><p id="split-count">2 items in order</p>
+<div role="list" id="split-items">
+<article role="listitem" id="split-row-1"><a href="https://www.amazon.in/dp/B0SPLT0001"><img alt="B0SPLT0001" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></a><span>Invented split lentils</span><span>Qty: 1</span><span>₹11.00</span></article>
+<article role="listitem" id="split-row-2"><a href="https://www.amazon.in/dp/B0SPLT0002"><img alt="B0SPLT0002" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></a><span>Invented split rice</span><span>Qty: 1</span><span>₹17.00</span></article>
+</div>
+<section id="split-bill"><h2>Bill summary</h2>
+<div id="nested-outer"><div id="nested-middle"><div id="nested-inner">
+<div id="nested-items-total">Items total <span>₹28.00</span></div>
+<div id="nested-handling">Handling fee <span>₹2.00</span><span id="nested-annotation"><span>Free for</span><svg aria-hidden="true" width="12" height="12"><circle cx="6" cy="6" r="5"></circle></svg></span></div>
+</div><div>Delivery fee <span>Free</span></div></div><div id="nested-you-pay">You pay <span>₹30.00</span></div></div>
+</section>
+<section><h2>Payment method</h2><div>Invented voucher ₹30.00</div></section>
+</section>
