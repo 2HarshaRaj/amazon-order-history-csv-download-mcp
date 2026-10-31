@@ -105,10 +105,11 @@ The UTF-8 JSON contains `metadata` (`windowStart`, `windowEnd`, and the actual
 separate order with its date, numeric INR total, Amazon.in detail URL,
 extraction timestamp, and item lines. Each item contains a deterministic
 zero-based `lineIndex`, optional/empty ASIN, product name, numeric quantity,
-numeric unit and line totals, `INR`, and its safe extraction source. The export
+numeric unit and line totals (subject to the two constrained null-money cases
+documented below), `INR`, and its safe extraction source. The export
 fails closed before file creation if a required fact is absent or invalid.
 
-For priced orders, `orderTotal` comes only from an explicit, visible `Grand Total`
+For conventional priced orders, `orderTotal` comes only from an explicit, visible `Grand Total`
 INR label/value pair in the already visited Order Details page's unique
 `#od-subtotals` summary. The final HTTPS Amazon.in detail URL must identify the
 requested order, and any explicit summary owner must match it. All eligible
@@ -116,6 +117,380 @@ Grand Total displays must agree. Missing, unreadable, hidden-only, or conflictin
 detail evidence stops export with safe `DETAIL_TOTAL_*` diagnostics; an identity
 mismatch uses `DETAIL_ORDER_MISMATCH`. Generic `Total`, subtotals, invoice amounts,
 item sums, and payment components cannot substitute for the detail Grand Total.
+
+Amazon Now uses a separate adapter in `src/poc/amazon-now.ts`. The selected
+order card supplies its actual HTTPS Amazon.in UFF/tracking details link; the
+exporter does not construct a conventional details URL for it. A single bounded
+click on the unique visible **View order details** control must open a unique,
+visible **Order Details** dialog. Pre-existing sheets are rejected. Committed
+UFF/tracking URLs must retain the exact selected Order ID. Before clicking, the
+control must share a bounded source region with one independently displayed,
+complete labeled tracking Order ID. The dialog must independently display the
+full ID once too. Only one optional display-only ASCII `#` is normalized; digits,
+hyphens and identity are never repaired. Missing, duplicate, hidden-only or
+conflicting ownership stops the export before dispatch or extraction.
+
+The alternate **View details** button has a separate, stricter path. It must be
+the sole current details action, with no competing **View order details** action.
+Its first labeled common ancestor must be a `DIV` within four parent steps,
+at most 500 text characters and 80 elements, containing one exact independently
+displayed selected ID and one `Order ID` label. Separate label/ID text nodes are
+supported. Page-wide containers, nested order cards, conflicting identities,
+hidden/historical source text and duplicate actions cannot authorize the click.
+The same captured button and its ownership evidence are revalidated immediately
+before one click; locator replacement cannot select another button. All committed
+main-frame navigation URLs still undergo the existing allowlist/selected-ID
+checks, including intermediate navigations when the final URL is valid.
+
+Two different Amazon Order IDs can share one Amazon Now tracking interface.
+Each original link discovered in **Your Orders** identifies its own order and may
+open a different delivery tab automatically. Each separately listed ID remains
+one JSON order with its own merchandise, bill and line indexes. The exporter
+preserves the initial tab selection and never clicks another tab to force a
+match. Delivery numbers, visual order and the tracking URL alone do not prove
+which order is currently selected: the visible bounded summary ID, its unique
+button, the entry/navigation identity and the opened dialog ID must all agree.
+Other inactive panels and tracking previews never provide merchandise facts.
+No combined delivery manifest, product links in the summary or parent-purchase
+aggregation is required or supported.
+
+For the alternate action, coverage is established inside that one verified
+**Order Details** dialog. The existing bounded merchandise reader must own every
+eligible product image/link, quantity and current price, with no incomplete
+semantic item rows, overlapping owners, hidden merchandise or duplicate products.
+One independently displayed, current declaration is required: `N item`, `N items`,
+`N item in order` or `N items in order`, after whitespace normalization. The
+anchored grammar captures only a canonical integer from 1 through 100; the
+existing singular/plural behavior is retained. Missing, hidden, historical,
+repeated (including mixed formats), malformed or ambiguously owned declarations
+fail closed. Product names, tab labels, controls and tracking previews cannot
+provide the independent count; unsupported suffixes never authorize extraction.
+For the independently verified `in order` presentation, the declaration counts
+**purchased units**. It must equal the sum of explicit purchased quantities, while
+every distinct merchandise row remains present. Unqualified `N item(s)` still
+requires both the validated line count and purchased-unit sum to agree. Neither
+declaration supplies a missing quantity or authorizes omitted merchandise. The
+ordinary quantity and single-line price-derivation paths retain their behavior.
+
+The exact package descriptor `1 Pc` is supported only inside the existing owned,
+current descriptor/period/explicit-purchased-unit structure. It supplies neither
+a second product name nor a purchased quantity. Other spellings, hidden or
+historical fragments, extra controls and ambiguous ownership remain rejected.
+
+### Verified Amazon Now line totals without a known unit price
+
+A multi-line, selected-order purchase can contain a multi-unit row with one
+unqualified current amount. That amount cannot establish a gross unit price.
+The bounded reader in `src/poc/now-line-total.ts` may corroborate its gross **line
+total** using the same selected order's separate HTML printable summary. It uses
+the existing selected-order print URL, with an allowlisted final printable route,
+exact Order ID in every committed URL and independent rendered Order # labels.
+It never decodes a PDF or reads embedded application/session scripts.
+
+The printable merchandise region must have the recognized Quantity/Total column
+structure and complete current ownership of every product link, quantity and INR
+amount. Every tracking row must match exactly one printable ASIN, purchased
+quantity and line amount, with no missing, extra, duplicate, weighted, hidden,
+historical or conflicting row. All rows are checked even when only one needs
+the fallback. The original selected tracking dialog is read again after the
+separate page closes; changing facts reject extraction. A missing or inaccessible
+summary, ambiguous source, conflicting unit-price hint or disagreement fails
+closed. Names remain the exact validated tracking names; an ASIN match supplies
+cross-source product identity when the printable description differs.
+
+The observed nested printable layout also owns a separate image column, empty
+dividers and a status row per product. An image must match that printable product's
+full name. A status row must be empty or contain only the exact separately labelled
+`Refunded (N)` structure and one explicit negative INR amount: canonical positive
+count no greater than purchased quantity, and positive refund magnitude no greater
+than the original gross line. Hidden, incomplete, unsigned, duplicate, conflicting
+or unknown statuses reject corroboration. This status is accounted for so it cannot
+be mistaken for another merchandise row or the original Total. It never supplies
+a unit price, changes purchased quantity, reduces the gross line, or creates an
+export adjustment. Settlement/refund transaction extraction is outside this path.
+
+Only a completely owned multi-unit row in the qualified purchased-unit-count
+presentation, corroborated by this independent source, may export:
+
+```json
+{
+  "unitPrice": null,
+  "itemTotal": 13.01,
+  "extractionSource": "amazon-now-verified-line-total-only"
+}
+```
+
+This fictional amount illustrates that no division, averaging, zero substitution
+or rounding allocation produces a unit price. `itemTotal` remains a nonnegative
+numeric INR gross line amount, quantity remains a positive integer greater than
+one, and order total remains independently sourced and numeric. The marker is
+per item; ordinary rows retain their existing source and numeric unit price.
+Internal selected-order/ASIN/quantity/paise proof is required again at JSON
+validation and is never serialized. Items total, exact listed You pay agreement,
+full coverage and one-paise order reconciliation still have to pass before atomic
+publication. Confirmed unpriced cancellations retain their separate contract.
+
+The ordinary `View order details` control can reach this same qualified layout.
+Only an otherwise unsupported multi-row, multi-unit unqualified amount requests
+a second read with the existing strict selected-dialog reader. It must obtain
+the qualified purchased-unit declaration, pass every existing identity, ownership,
+bill and coverage check, and preserve the initial owned merchandise and financial
+facts before requesting printable corroboration. The strict dialog is revalidated
+afterward and must satisfy the same selected-order count and financial guards.
+No proof flags are synthesized. Existing known unit prices and the constrained
+single-line derivation path retain their original behavior.
+
+Consumer coordination is tracked in
+[personal-automation-library Issue #242](https://github.com/2HarshaRaj/personal-automation-library/issues/242).
+Consumers must explicitly accept this marker with null unit price and numeric
+line total; the marker with a numeric unit price, or an unknown unit price without
+the marker, is invalid. This change does not authorize synchronization or
+deployment. The broader HTML snapshot library remains separate.
+
+The selected dialog must have one independently recognized **Bill summary**,
+**Items total** and effective **You pay**, with no hidden/conflicting identities
+or financial evidence. Items total must agree with validated line totals within
+the existing one-paise tolerance; merchandise plus supported signed adjustments
+must reconcile independently. You pay must match the selected order's listed
+INR total **exactly in integer paise**. A matching total alone is insufficient.
+A second order's items or bill cannot supply missing facts. Duplicate selected
+order IDs are rejected at JSON validation; different IDs are retained even when
+their merchandise or amounts coincide. Any failure preserves prior complete JSON.
+
+The selected-order bill guard collapses a composite ancestor match only when a
+matching descendant contains its sole occurrence of that declaration label.
+The unfiltered dialog must also contain exactly one occurrence of each required label,
+counted with boundaries between DOM text nodes. Thus adjacent `You pay` and
+`Inclusive of taxes` elements do not erase the label's trailing word boundary.
+The original raw declaration candidates still authorize labels; the boundary scan
+cannot invent a missing declaration. Composite collapse uses the same boundary count;
+independent repeated text, including fragmented or hidden text in an ancestor,
+cannot disappear. Visibility filtering and matching amounts never authorize
+deduplication. Bill regions containing or enclosed by semantic merchandise/list
+boundaries, product links or quantity signals fail closed. Every bill image/icon
+must belong to the existing strictly bounded `Free for` handling-fee annotation;
+unowned images and product identifiers are rejected, including hidden images.
+The [bill ownership notes](docs/amazon-now-bill-ownership-diagnostic.md) explain
+the correction and its limits. A visible strike-through bill comparison is permitted
+only inside one independently label-bound row reached within five parent steps.
+Each owning row may contain only one comparison; it never supplies the effective
+amount, a discount or a refund. Hidden amounts/text, historical labels, unowned
+comparisons, duplicate comparisons and unknown charges remain rejected.
+The corrected implementation has synthetic offline coverage; successful extraction
+of an owner account still requires separate authorized live validation.
+
+The alternate `View details` path additionally supports one narrowly recognized
+**Out of Stock Items** region, separate from fulfilled rows and the bill. Its
+entire current boundary must contain only a heading, complete unpriced image/name/
+package rows and the independently owned `Refund for these items initiated` notice
+with its bounded icon and explanatory timing text. The observed unavailable package
+form is `Pack of N, M Pcs`, a literal period and a separate explicit purchased-unit
+count; all counts must be positive canonical safe integers. None supplies a price.
+Priced, hidden, incomplete, duplicated or conflicting unavailable rows, controls,
+product links, ambiguous status evidence and overlapping active identities reject
+the region. Only proven unavailable merchandise is omitted. Fulfilled line and
+unit counts, Items total, reconciliation and exact listed You pay agreement still
+have to pass. No refund amount or settlement history is inferred. Other refund and
+cancellation layouts remain unsupported.
+
+Fictional offline fixtures exercise a shared interface whose two original links
+automatically select separate seven-line and one-line orders, with independent
+identities, counts and bills. Their markup is test evidence, not a claim about
+live Amazon DOM. The owner-confirmed per-order model supersedes the earlier
+combined-manifest assumption. Other unsupported presentations require separate
+owner-local validation before acceptance is expanded.
+
+For Now, the independent billed total is the unique effective INR **Bill summary
+→ You pay** declaration, with internal provenance `amazon-now-you-pay`. Computed
+line-through prices and hidden content are excluded. The adapter retains exact
+visible product names, explicit `Qty:`/`Quantity:` or `N unit(s)` quantities and
+current prices, with an empty ASIN when no valid associated identifier is
+available. A supported package descriptor such as `500 g · 1 unit` supplies only
+its explicit purchased-unit count; package size is never treated as quantity.
+Adjacent rupee and numeric DOM nodes are paired only within their own parent.
+Merchandise alone also supports visually rendered adjacent currency/number
+elements beneath `aria-hidden="true"`. Both components must belong to exactly
+one common bounded merchandise row with an independently visible quantity and
+eligible image/product link. The same price view drives row discovery and field
+extraction; values are never matched to products by position. Semantic item
+boundaries cannot be crossed to borrow a price. Each hidden price field may contain
+only the one price or an explicit `Unit price:`, `Item total:` or `Line total:`
+field; unknown qualifiers, extra values and unowned currency evidence fail.
+`hidden`, display/visibility/opacity hiding and historical strike-through remain
+excluded. Identity, names, quantities, images, Bill summary and funding regions
+retain their strict visibility/accessibility rules. Accessibility-hidden bills
+or identities cannot supply missing required facts.
+
+Anchored grammars are shared by quantity field extraction and snapshot parsing:
+`Qty: N`, `Quantity: N`, `N unit(s)`, or a positive mass/volume measurement followed
+by `·`, `•` or `|` and the explicit unit count. Supported measurement units remain
+mg/g/kg/ml/l/litre(s)/liter(s). Only the final purchased-unit count supplies
+quantity; zero/negative package measurements, range endpoints and unbounded
+prefixes do not. Discovery retains malformed quantity signals so they fail
+validation rather than disappearing.
+
+Separately rendered package metadata is normalized only when a supported positive
+mass/volume measurement, a literal ASCII period `.`, and an existing standalone
+`N unit(s)`, `Qty: N` or `Quantity: N` declaration are three
+adjacent fields sharing a parent inside one independently owned merchandise row.
+Only whitespace may separate those siblings. The normalization keeps the final
+purchased-unit declaration unchanged; package size never supplies quantity.
+The row must then have exactly one original name before that quantity and its
+independent price field(s) afterward. It rejects extra/misplaced metadata, unknown
+separators, hidden or historical conflicting metadata and product/control evidence
+inside the three fields. Product-name punctuation is preserved. Flat snapshot
+fragments alone cannot prove this structure and are still rejected by the pure
+parser; its name and quantity grammars are unchanged. Hiding or striking through
+both metadata fields cannot make the row fall back to a bare purchased count.
+
+The descriptor can also be a plain gram range, exactly `lower-upper g` with an
+ASCII hyphen. Both endpoints use positive canonical decimal syntax and must be
+strictly increasing when compared as decimal strings. The same adjacent literal
+period and explicit purchased-unit proof applies. Weights never become quantities;
+equal/decreasing ranges, alternate punctuation/units and unproven flat fragments
+remain rejected.
+
+The same bounded structure also supports exactly `Pack of N, M Tablets` as its
+descriptor, using the fixed capitalization and ASCII comma after existing
+whitespace normalization. Both `N` and `M` must be positive safe integers, with no
+signs, decimals, leading zeros or exponent notation. Neither count supplies
+purchased quantity; only the independent purchased-unit declaration does. Other
+pack categories, punctuation, qualifiers and arbitrary retail descriptions are
+unsupported. Hidden or historical pack evidence, including malformed/unsupported
+`Pack` metadata, cannot disappear to permit a bare-count fallback. The invented
+eight-item tablet fixture covers seven measurements plus this descriptor; the
+23-item fixtures retain their existing presentations.
+
+The same period-only sibling proof also supports exactly `Pack of N, M g Each`
+within the existing 500-character field bound.
+`N` is a positive canonical safe integer. `M` uses the existing positive decimal
+measurement syntax: no signs, leading zeros, exponent notation or unit changes;
+its numeric value must remain positive and below `Number.MAX_SAFE_INTEGER`
+(underflow and overflow are rejected). Fixed `Pack of`, ASCII comma, lowercase
+`g` and `Each` spelling are required after existing whitespace normalization.
+Neither pack count nor per-piece weight supplies purchased quantity. Only the
+separate explicit purchased-unit declaration does. The original name remains
+unchanged, and only an adjacent literal ASCII period is accepted; middle dots
+are not supported for this descriptor. Existing field-count, current visibility,
+ownership, hidden/historical Pack rejection, independent price and reconciliation
+checks apply. The invented ten-item fixture combines this descriptor with the
+previously supported package forms and tests atomic failure preservation.
+
+The same DOM-adjacent normalization also recognizes the case-sensitive piece
+packaging descriptors `N Pcs (Approx. X–Y g)` and `N Pcs (X–Y g)`. `N` must be a
+positive safe integer with canonical digit syntax. Both gram endpoints must be
+positive decimals in strictly increasing order, compared exactly as decimal
+strings. The range accepts only an ASCII hyphen `-` or en dash `–` (U+2013).
+Only these piece descriptors additionally permit a separate literal middle dot
+`·` (U+00B7); the existing ASCII period `.` remains valid. Other package types
+retain their period-only split-field rule. No punctuation is ignored.
+
+The descriptor, separator and separate purchased-unit declaration must remain
+current, independently bounded adjacent siblings under the existing ownership
+checks. Only the final purchased-unit declaration supplies quantity: neither
+piece count nor weight endpoints do. Invalid ranges, unknown qualifiers/units,
+extra names, duplicate/misplaced fields, nested product/control evidence and
+hidden/struck-through piece metadata remain rejected. Names retain their exact
+text. The invented five-item piece fixture includes both new descriptors alongside
+mass/volume, tablet-pack and single-field approximate-weight regressions.
+
+The additional exact, case-sensitive form is
+`Approx. (lower-upper g) separator N unit(s)`. Its prefix includes the literal
+ASCII period, its parentheses and range hyphen are ASCII, and its gram endpoints
+must be positive decimal values in strictly increasing order. Endpoints are
+compared exactly as decimal strings, never rounded or used as purchased counts.
+Only the explicit final positive safe-integer `N` supplies quantity. The separator
+is exactly one ASCII period `.` (U+002E), middle dot `·` (U+00B7), or bullet `•`
+(U+2022), with optional surrounding whitespace. Pipes remain valid for standard
+package descriptors but are not accepted for this approximate-weight form.
+Other prefixes, units, range punctuation, doubled/unknown separators, missing
+counts and non-increasing ranges remain unsupported. The entirely invented
+23-item accessibility fixture now uses this approximate gram-range form for its
+final row and separate package/period/count fields for the other 22 rows. All 23
+products retain their original names, independently sourced prices and billed
+total; the previous single-field presentations remain regression fixtures.
+
+Bill values come from individual label-bound rows, including `Inclusive of taxes`
+only as a subtitle of `You pay`; no flat sequence of unrelated tokens is paired.
+The normal multi-unit path requires both labeled **Unit price** and **Item total**
+or **Line total** declarations. One narrow exception supports exactly one current,
+independently owned merchandise row, quantity greater than one and exactly one
+unlabelled eligible current price. The DOM reader must supply an internal proof
+that hidden/historical rows, quantities, names or conflicting financial evidence
+have not disappeared. A single visible crossed-out amount is permitted only as
+a comparison in the same bounded current-price field or exactly one independently
+label-bound bill-row ancestor. Bill comparisons may have layout wrappers, but the
+recognized row must be reached within five parent steps from the historical
+amount. General membership in Bill summary is insufficient. The entire owning
+row must contain exactly one historical comparison candidate, including across
+separate wrappers; existing current bill facts remain independently validated.
+Merchandise comparisons retain their immediate current-price-field requirement.
+The historical value never enters calculations. Actual hiding, labelled historical prices
+and extra comparison candidates cannot supply this proof. Existing validated,
+visually rendered accessibility-hidden price pairs retain their treatment.
+
+For that exception only, exactly one independent **Items total** and one **You pay**
+must each equal the current line price **exactly in integer paise**. Other subtotal
+declarations, duplicate/ambiguous charge kinds, unknown charges and any nonzero
+fee/discount/promotion reject the exception, even if adjustments net to zero.
+The three totals must use canonical positive INR notation, represent safe integer
+paise and agree without the usual one-paise reconciliation tolerance. The line
+paise must divide exactly by the positive safe-integer purchased count, producing
+a positive whole-paise unit amount without rounding. `itemTotal` preserves the
+source line total; `unitPrice` is **mathematically derived from that independently
+verified line total**, not directly displayed by Amazon. The internal formatted
+unit value is marked `Derived INR`; no public JSON field or provenance enum is
+added. Multiple product lines, missing proof/totals, non-divisible totals and
+ambiguous prices retain strict rejection. Quantity-one pricing and the normal
+explicitly labelled multi-unit path retain their behavior.
+
+Quantity declarations bind bounded merchandise rows with
+product evidence. All remaining product links, images and current prices must
+belong to those rows. Separately named delivery/status/payment regions and
+explicitly presentational images do not become products; incomplete rows,
+overlap, duplicates and unrecognized image/price ownership fail closed.
+Heading-free delivery-time messages can own an isolated single icon without a
+status role. This requires a complete delivered-duration message outside item/list
+boundaries, with no product links, ASIN candidates or financial evidence in that
+container. A separate minimal `div > [img, div]` decoration may contain two
+text-only leaves: `Delivered in N minutes` and `Arrived at H:MM AM/PM` (a valid
+12-hour clock time). The arrival leaf cannot include unrelated text, controls or
+additional images; the recognizer does not climb through the shared merchandise
+container to find an icon.
+
+One icon-only dialog control may also be excluded, strictly as
+`button > div > img` beside a single content `div` in a two-child `div` frame.
+That sibling content must contain Bill summary and every quantity candidate.
+Multiple matching controls, extra frame children/text, merchandise boundaries,
+quantity declarations, product links, ASIN-like imagery, monetary evidence and
+additional images disqualify the exclusion. Both new structures inspect hidden
+and historical evidence too. Images in merchandise buttons still require their
+normal merchandise owner. Other unowned images still fail closed.
+
+Explicit handling/delivery/shipping fee rows count only their effective charge;
+**Free** with a crossed-out fee contributes no adjustment. A handling-fee `Free for`
+caption is accepted only in its own bounded caption/icon group; the row must
+still declare a separate,
+unambiguous effective **Free** or INR charge. The caption cannot replace a missing
+charge or hide conflicting current values. Discounts/promotions remain separate
+rows with explicit negative INR amounts. Included/qualified fees, bill refunds outside
+the narrowly validated unavailable-item region, Now cancellations, unknown bill rows,
+ambiguous prices and unsupported layouts
+stop export. Separate funding sections never supply totals or adjustments.
+Ordinary Now items use `amazon-now-order-details` provenance; only the independently
+verified unknown-unit rows described above use `amazon-now-verified-line-total-only`.
+Adjustments use `amazon-now-bill-summary`; the JSON field structure and one-paise reconciliation
+contract are unchanged. Safe failures use existing identity/validation codes or
+`NOW_EXTRACTION_FAILED`. Owner-local reports allowlist the distinct total source.
+
+Now validation in this branch uses invented static and offline Chromium fixtures,
+including two complete 23-item presentations and an additional invented component
+fixture for heading-free status and explanatory fees. This does not establish
+compatibility with every live Now layout. The isolated seventh September-order
+check, full September 24-order/wallet regression and October five-order/34-item
+regression remain separate owner-authorized live work. Production synchronization,
+merge, deployment and scheduler re-enable each require separate owner approval.
+The existing Amazon Orders catch-up task must remain **Disabled**.
 
 Order-card header totals remain validated list observations, not authoritative
 gross amounts. A syntactically valid list `Total` can differ from the detail
@@ -128,6 +503,120 @@ invalid, or conflicting list headers still stop export with `LIST_TOTAL_*` reaso
 Duplicate same-order cards, including across scanned pages, must agree on their
 date, status, and monetary facts (`LIST_DUPLICATE_CONFLICT`); later cards cannot
 silently overwrite earlier observations.
+
+**Verified Amazon Pay Wallet funding cards are excluded before merchandise
+selection (Issue #20).** The owner-confirmed proof is one exact current `h3`
+`Amazon Pay Wallet` and one exact current `span` `Money added`. Their third parent
+must be the same inner `div`, inside the same order card, with distinct `a-row`
+branches. Both fields must be unique; hidden, historical or differently owned
+copies make the evidence uncertain.
+
+The bounded block must contain exactly two agreeing Amazon.in `/dp/` links: one
+single-image link and one title link. These links are permitted wallet-card
+structure, not proof by themselves. Absence of `purchasedItems` alone is also
+insufficient. Purchased-item regions (including hidden copies), payment widgets,
+additional product/image/quantity/price evidence, unsupported block text,
+conflicting identities and cancellation/refund markers prevent classification.
+The current card must have one complete matching order ID; existing date parsing
+and any declared header-total validation remain required. The classifier makes
+no request to wallet/detail pages and adds no wallet financial export.
+
+Outside-block text accounting ignores only non-rendered `SCRIPT`/`STYLE` source,
+including its contribution to ancestor wrappers. Ordinary hidden content is still
+checked. One completely empty inactive actions scaffold may be accounted for only
+in the verified right-column sibling of the funding block: an empty action list,
+empty collapsed pane, hidden toggle, one inert `javascript:void(0)` anchor and one
+exact `More options` prompt. The complete shape, same-card ownership and absence
+of extra content are required. Nonempty/active/misplaced widgets, arbitrary hidden
+text and genuine merchandise remain uncertain. No broad column, class, amount,
+identifier or label-only exemption authorizes funding exclusion.
+
+Unknown or ambiguous records retain normal strict selection and extraction.
+Products mentioning Amazon Pay Wallet and genuine purchases paid with wallet
+balance are not excluded by payment wording or product title. A detail failure
+never authorizes a skip. Unsupported layouts can still stop the entire export
+without changing prior JSON; no live compatibility beyond the confirmed pattern
+is claimed by offline fixtures.
+
+Excluded funding records consume no merchandise slots or indexes. Funding-only
+pages continue pagination, and funding dates cannot trigger the merchandise date
+cutoff. The existing 50-order cap and 20-page bound remain. New cards beyond an
+already full merchandise cap retain the existing non-validation behavior; known
+duplicates remain checked across scanned pages. Funding IDs are counted once; conflicting classification, dates or declared header facts
+fail closed, including across pages. No funding identity, amount or type flag is
+added to public JSON. Independent merchandise totals and one-paise reconciliation
+are unchanged.
+
+`LIST_WALLET_FUNDING_EXCLUDED` records the cumulative unique excluded-card count
+across scanned pages, with no merchandise order index or funding facts. Existing
+`LIST_WALLET_LABEL_UNVERIFIED`, `LIST_WALLET_LABEL_AMBIGUOUS` and
+`LIST_WALLET_EVIDENCE_UNAVAILABLE` remain diagnostic-only hints and never authorize
+exclusion; in particular the former assumed combined `Amazon Pay Wallet Add
+Money` field is not classification proof. Observation errors retain safe codes
+without exception messages. No raw labels, DOM snapshots, balances, IDs, amounts,
+paths or URLs are added by wallet events; existing private report handling is
+unchanged.
+
+### Audited free Alexa+ digital upgrade (Issue #22)
+
+List discovery recognizes canonical `D01-NNNNNNN-NNNNNNN` identifiers as well as
+numeric IDs and UUIDs. Recognition never grants eligibility or exclusion. A visible
+card with missing, malformed, unfamiliar or conflicting identifiers/dates stops
+the export; it cannot disappear through an identifier-parser miss.
+
+The owner policy in [Issue #22](https://github.com/2HarshaRaj/amazon-order-history-csv-download-mcp/issues/22)
+classifies the identified free Alexa-to-Alexa+ activation as a non-merchandise
+upgrade. Amazon's rendered page does not literally say `free upgrade`; that
+meaning comes from the explicit owner decision. `src/poc/digital-upgrade.ts`
+requires independent current evidence for the exact public catalogue service and
+seller, digital product-link presentation and zero charge. Neither the word
+Alexa, a D01 prefix nor an amount of zero supplies this proof by itself.
+
+The current card must own one matching D01 identity, valid in-window date, one
+complete exact service image/title pair, a uniquely owned details action and an
+unambiguous zero INR header total. Its independently opened detail page must keep
+that exact selected ID through all committed allowlisted URLs. The unique owned
+detail region must independently identify the same ID/date, one complete service
+row, the exact service ASIN and seller identity, the observed digital link form,
+an explicit current zero item price and both zero subtotal and `Total for this
+Order` declarations. Hidden, historical, extra, malformed or conflicting facts,
+unknown quantities, other merchandise and unavailable sources reject exclusion.
+The original card and header are revalidated after the separate detail read.
+Only the recognized screen-reader/visible copies inside the same owned price
+field may duplicate zero; their whitespace is presentation, not financial proof.
+
+At most one distinct qualifying upgrade is excluded in a requested window.
+Matching pagination duplicates are revalidated and counted once; another distinct
+digital activation or an unknown/charged digital product remains unresolved and
+stops publication. Exclusions consume no merchandise slot or line/order index,
+and an excluded-only page cannot stop pagination at the merchandise date cutoff.
+Outside-window D01 cards remain date-accounted and are not claimed as exclusions.
+There is no generalized digital purchase adapter or change to the merchandise
+JSON contract, Amazon Now parsing, wallet proof, reconciliation or atomic output.
+
+The internal list result's aggregate `audit` reports `digitalOrdersExcluded`,
+`walletFundingExcluded` and `unresolvedOrders`. These counters are available to the
+owner-private monthly coverage audit and are not added to merchandise JSON.
+`LIST_DIGITAL_UPGRADE_EXCLUDED` counts unique verified exclusions; the first
+unresolved card emits `LIST_ORDER_UNRESOLVED` with count 1 before failure.
+Digital proof failures use `LIST_DIGITAL_UNVERIFIED`. These fixed categorical
+events have no merchandise index, raw order ID, product name, URL or DOM content.
+A zero unresolved count covers observed cards only: reaching an order/page cap
+does not establish complete-window coverage. The independent audit must also
+prove the pagination boundary and account for every in-window included or
+explicitly excluded card before claiming completeness.
+
+Tests use fictional orders and local intercepted HTML. Public catalogue identities
+bind the narrow policy; no owner's order identifier, real purchase fixture,
+address, payment data or authenticated HTML is committed. Private evidence and
+live validation results remain outside Git. No production exclusion configuration,
+PDF subsystem, synchronization or deployment is introduced.
+
+Issue #20 remains open for independent inspection of this correction. Any further
+owner-local evidence should contain only masked tag/role/stable-attribute
+structure, field meanings and uniqueness/visibility counts; do not share personal
+HTML, screenshots, IDs, prices, URLs, balances or credentials. Another isolated
+live validation, synchronization, merge or deployment needs separate approval.
 
 Confirmed unpriced cancellations retain the existing constrained null-money
 representation only when the list has no total, cancellation is independently
@@ -155,6 +644,73 @@ This directory is outside Git repositories and separate from the exported JSON.
 Console output and scheduled operational logs contain only stage/reason codes,
 counts, and whether the report was saved. Exit status remains 1 on failure;
 authentication failures still leave Chromium open for manual sign-in.
+
+Amazon Now adds categorical checkpoints to the existing bounded event list:
+`NOW_NAVIGATION`, `NOW_DETAILS_CONTROL`, `NOW_TRACKING_IDENTITY`,
+`NOW_DIALOG_OPEN`, `NOW_DIALOG_IDENTITY`, `NOW_BILL_SUMMARY`,
+`NOW_ITEMS_FEES`, and `NOW_PARSING`. These record entry into an operation,
+not proof that it succeeded. The DOM reader returns only allowlisted failure
+categories for diagnostics: `NOW_DOM_BOUNDS_INVALID`,
+`NOW_TRACKING_IDENTITY_INVALID`, `NOW_DIALOG_IDENTITY_INVALID`,
+`NOW_ORDER_STATUS_UNSUPPORTED`, `NOW_BILL_SUMMARY_INVALID`,
+`NOW_BILL_ROW_INVALID`, `NOW_ITEM_OWNERSHIP_INVALID`, and
+`NOW_ITEM_FIELDS_INVALID`. Parsing/reconciliation retains its existing exact
+reason codes, including `TOTAL_MISMATCH`. Playwright timeouts retain category
+`timeout`; unexpected errors use `operation-failed` without their messages or
+stacks. A transport failure during the DOM read can only identify the entered
+read operation; internal checkpoints are available when the bounded read returns.
+These additions contain only fixed codes, elapsed time and the selected order
+index, without adding IDs, amounts, product text, URLs or page content. They do
+not change extraction acceptance rules or capture partial snapshots as evidence.
+
+Inside `parseNowSnapshot`, item-facts rejections add one fixed event before the
+unchanged terminal `items/ITEM_FACTS_INVALID` failure:
+
+| Event reason | Rejected item facts |
+| --- | --- |
+| `NOW_PARSE_QUANTITY_MISSING` | No quantity-signal field. |
+| `NOW_PARSE_QUANTITY_DUPLICATE` | Multiple quantity-signal fields, even if identical. |
+| `NOW_PARSE_QUANTITY_INVALID` | The sole quantity field fails the existing explicit grammar, range or positive safe-integer check. |
+| `NOW_PARSE_NAME_MISSING` | No product-name field, or a blank sole name. |
+| `NOW_PARSE_NAME_DUPLICATE` | Multiple product-name candidates. |
+| `NOW_PARSE_IDENTIFIERS_CONFLICT` | Validated image/link identifiers disagree. |
+
+The event includes only fixed stage/reason, elapsed time, the selected order
+index when available, and `lineIndex`: the zero-based snapshot item index bounded
+to 0–99. The existing report-level `lineIndex` also identifies that failing row;
+no partial item facts are captured. Attribution follows the original validation
+order and stops at the first rejected row/condition. A quantity-signal field
+means the existing conservative recognizer matched, not that its grammar is
+valid. Earlier DOM ownership or snapshot-shape failures retain their own codes
+without inventing a parser item index. Price and reconciliation failures retain
+their existing reasons. These events contain no raw text, identifiers, monetary
+values, URLs, selectors, DOM or exception messages. Parser acceptance, wallet
+classification, merchandise selection, export JSON and atomic publication are
+unchanged.
+
+Merchandise ownership rejections use the following fixed subreasons. The generic
+`NOW_ITEM_OWNERSHIP_INVALID` remains allowlisted as a compatibility fallback;
+every current ownership abort site has a specific attribution.
+
+| Reason | Existing rejection |
+| --- | --- |
+| `NOW_NON_ITEM_REGION_INVALID` | A recognized decorative/status/payment region has an invalid boundary or contains merchandise/bill evidence. |
+| `NOW_ITEM_QUANTITY_MISSING` | No visible quantity candidates remain after exclusions. |
+| `NOW_ITEM_EVIDENCE_EXCESSIVE` | Quantity or image evidence exceeds the existing 100-candidate bound. |
+| `NOW_ITEM_QUANTITY_AMBIGUOUS` | A candidate row scope does not contain exactly one quantity. |
+| `NOW_ITEM_IMAGE_AMBIGUOUS` | A candidate row scope contains multiple merchandise images. |
+| `NOW_ITEM_BOUNDARY_INVALID` | The bounded row search reaches an invalid scope or conflicts with an excluded region. |
+| `NOW_ITEM_ROWS_OVERLAP` | Candidate merchandise rows contain or overlap each other. |
+| `NOW_ITEM_IMAGE_OWNER_INVALID` | An image does not have exactly one merchandise owner. |
+| `NOW_ITEM_LINK_OWNER_INVALID` | A product link does not have exactly one merchandise owner. |
+| `NOW_ITEM_PRICE_OWNER_INVALID` | Current price evidence does not have exactly one merchandise owner. |
+
+Attribution follows the existing validation order and stops at the first
+rejection. At the evidence-limit check, missing quantities take precedence over
+excessive evidence. At the final ownership check, images precede product links,
+which precede current prices, independently of their DOM order. These codes add
+no counts, text, selectors, DOM snapshots or financial facts. They identify the
+rejected condition without explaining its live cause or relaxing any rule.
 
 Reports contain available validated order IDs, dates/cancellation status, the
 zero-based selected order index, product names/ASINs, quantities, monetary facts

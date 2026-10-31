@@ -44,6 +44,49 @@ const failureStageSchema = z.enum([
 ]);
 export type FailureStage = z.infer<typeof failureStageSchema>;
 
+/** Fixed Amazon Now codes only; no page-derived labels or exception text. */
+export const NOW_CHECKPOINTS = [
+  "NOW_NAVIGATION",
+  "NOW_TRACKING_IDENTITY",
+  "NOW_DETAILS_CONTROL",
+  "NOW_DIALOG_OPEN",
+  "NOW_DIALOG_IDENTITY",
+  "NOW_BILL_SUMMARY",
+  "NOW_ITEMS_FEES",
+  "NOW_PARSING",
+] as const;
+export const NOW_PARSER_FAILURES = [
+  "NOW_PARSE_QUANTITY_MISSING",
+  "NOW_PARSE_QUANTITY_DUPLICATE",
+  "NOW_PARSE_QUANTITY_INVALID",
+  "NOW_PARSE_NAME_MISSING",
+  "NOW_PARSE_NAME_DUPLICATE",
+  "NOW_PARSE_IDENTIFIERS_CONFLICT",
+] as const;
+export const NOW_OWNERSHIP_FAILURES = [
+  "NOW_NON_ITEM_REGION_INVALID",
+  "NOW_ITEM_QUANTITY_MISSING",
+  "NOW_ITEM_EVIDENCE_EXCESSIVE",
+  "NOW_ITEM_QUANTITY_AMBIGUOUS",
+  "NOW_ITEM_IMAGE_AMBIGUOUS",
+  "NOW_ITEM_BOUNDARY_INVALID",
+  "NOW_ITEM_ROWS_OVERLAP",
+  "NOW_ITEM_IMAGE_OWNER_INVALID",
+  "NOW_ITEM_LINK_OWNER_INVALID",
+  "NOW_ITEM_PRICE_OWNER_INVALID",
+] as const;
+export const NOW_DOM_FAILURES = [
+  "NOW_DOM_BOUNDS_INVALID",
+  "NOW_TRACKING_IDENTITY_INVALID",
+  "NOW_DIALOG_IDENTITY_INVALID",
+  "NOW_ORDER_STATUS_UNSUPPORTED",
+  "NOW_BILL_SUMMARY_INVALID",
+  "NOW_BILL_ROW_INVALID",
+  "NOW_ITEM_OWNERSHIP_INVALID",
+  ...NOW_OWNERSHIP_FAILURES,
+  "NOW_ITEM_FIELDS_INVALID",
+] as const;
+
 const reasonCodeSchema = z.enum([
   "BROWSER_OPEN_FAILED",
   "LIST_NAVIGATION_FAILED",
@@ -54,6 +97,13 @@ const reasonCodeSchema = z.enum([
   "LIST_TOTAL_AMBIGUOUS",
   "LIST_TOTAL_READ_FAILED",
   "LIST_DUPLICATE_CONFLICT",
+  "LIST_WALLET_LABEL_UNVERIFIED",
+  "LIST_WALLET_LABEL_AMBIGUOUS",
+  "LIST_WALLET_EVIDENCE_UNAVAILABLE",
+  "LIST_WALLET_FUNDING_EXCLUDED",
+  "LIST_DIGITAL_UPGRADE_EXCLUDED",
+  "LIST_ORDER_UNRESOLVED",
+  "LIST_DIGITAL_UNVERIFIED",
   "DATE_RANGE_UNSUPPORTED",
   "DETAIL_NAVIGATION_FAILED",
   "DETAIL_SELECTOR_MISSING",
@@ -62,6 +112,10 @@ const reasonCodeSchema = z.enum([
   "DETAIL_TOTAL_INVALID",
   "DETAIL_TOTAL_AMBIGUOUS",
   "DETAIL_TOTAL_READ_FAILED",
+  "NOW_EXTRACTION_FAILED",
+  ...NOW_CHECKPOINTS,
+  ...NOW_PARSER_FAILURES,
+  ...NOW_DOM_FAILURES,
   "LIST_DETAIL_TOTAL_DIFFER",
   "ADJUSTMENT_READ_FAILED",
   "ADJUSTMENT_AMOUNT_INVALID",
@@ -100,6 +154,7 @@ interface ItemFacts {
   quantity: number;
   unitPrice?: MoneyFact;
   itemTotal?: MoneyFact;
+  extractionSource?: string;
 }
 interface SummaryFacts {
   orderId: string;
@@ -136,6 +191,7 @@ interface ItemEvidence {
   quantity?: number;
   unitPricePaise?: number;
   itemTotalPaise?: number;
+  extractionSource?: string;
 }
 interface AdjustmentEvidence {
   adjustmentIndex: number;
@@ -149,6 +205,7 @@ interface DiagnosticEvent {
   reason: ReasonCode;
   elapsedMs: number;
   orderIndex?: number;
+  lineIndex?: number;
   count?: number;
   strategyIndex?: number;
   category?: FailureReport["failure"]["category"];
@@ -196,6 +253,7 @@ export interface FailureReport {
   items: ItemEvidence[];
   adjustments: AdjustmentEvidence[];
   extractionSource?: string;
+  orderTotalSource?: "order-detail-grand-total" | "amazon-now-you-pay";
   reconciliation?: Reconciliation;
   events: DiagnosticEvent[];
   timings: StageTiming[];
@@ -207,7 +265,7 @@ function category(
   authenticationRequired: boolean,
 ): FailureReport["failure"]["category"] {
   if (authenticationRequired) return "authentication";
-  if (error instanceof DiagnosticError) return "validation";
+  if (error instanceof DiagnosticError) return error.category;
   if (error instanceof Error) {
     if (error.name === "TimeoutError") return "timeout";
     const code = (error as NodeJS.ErrnoException).code;
@@ -242,8 +300,10 @@ const diagnosticTitle = z
 const ORDER_ID =
   /^(?:\d{3}-\d{7}-\d{7}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i;
 const ADJUSTMENT_LABEL =
-  /^(?:(?:shipping|delivery)(?: (?:charge|fee|discount|promotion))?s?|marketplace fee|discount|promotion(?: applied)?|tax|gst|vat|gift wrap|cash\s*\/\s*pay on delivery fee)$/i;
+  /^(?:(?:shipping|delivery|handling)(?: (?:charge|fee|discount|promotion))?s?|marketplace fee|discount|promotion(?: applied)?|tax|gst|vat|gift wrap|cash\s*\/\s*pay on delivery fee)$/i;
 const extractionSourceSchema = z.enum([
+  "amazon-now-order-details",
+  "amazon-now-bill-summary",
   "order-detail",
   "invoice-safe-fallback",
   "cancelled-order-list",
@@ -347,6 +407,7 @@ const failureReportSchema: z.ZodType<FailureReport> = z
             quantity: countSchema.positive().optional(),
             unitPricePaise: paiseSchema.optional(),
             itemTotalPaise: paiseSchema.optional(),
+            extractionSource: z.literal("amazon-now-verified-line-total-only").optional(),
           })
           .strict(),
       )
@@ -385,6 +446,7 @@ const failureReportSchema: z.ZodType<FailureReport> = z
       )
       .max(MAX_LINES),
     extractionSource: extractionSourceSchema.optional(),
+    orderTotalSource: z.enum(["order-detail-grand-total", "amazon-now-you-pay"]).optional(),
     reconciliation: z
       .object({
         itemsPaise: paiseSchema,
@@ -404,6 +466,7 @@ const failureReportSchema: z.ZodType<FailureReport> = z
             reason: reasonCodeSchema,
             elapsedMs: countSchema,
             orderIndex: orderIndexSchema.optional(),
+            lineIndex: countSchema.max(99).optional(),
             count: countSchema.optional(),
             strategyIndex: countSchema.max(5).optional(),
             category: categorySchema.optional(),
@@ -441,6 +504,8 @@ function productTitle(value: string): string | undefined {
 
 function source(value: string): string | undefined {
   return [
+    "amazon-now-order-details",
+    "amazon-now-bill-summary",
     "order-detail",
     "invoice-safe-fallback",
     "cancelled-order-list",
@@ -473,6 +538,7 @@ function itemFacts(item: ItemFacts, lineIndex: number): ItemEvidence {
         : undefined,
     unitPricePaise: paise(item.unitPrice),
     itemTotalPaise: paise(item.itemTotal),
+    extractionSource: item.extractionSource === "amazon-now-verified-line-total-only" ? item.extractionSource : undefined,
   };
 }
 
@@ -509,6 +575,7 @@ export class DiagnosticError extends Error {
     readonly stage: FailureStage,
     readonly reason: ReasonCode,
     message: string,
+    readonly category: "validation" | "timeout" | "operation-failed" = "validation",
   ) {
     super(message);
   }
@@ -528,6 +595,7 @@ export class FailureDiagnostics {
   private items: ReturnType<typeof itemFacts>[] = [];
   private adjustments: ReturnType<typeof adjustmentFacts>[] = [];
   private extractionSource?: string;
+  private orderTotalSource?: FailureReport["orderTotalSource"];
   private itemCount = 0;
   private adjustmentCount = 0;
   private lineIndex?: number;
@@ -571,6 +639,32 @@ export class FailureDiagnostics {
     this.note(stage, reason);
     this.events[this.events.length - 1].category = category(error, false);
   }
+  nowParserFailure(
+    reason: (typeof NOW_PARSER_FAILURES)[number],
+    lineIndex: number,
+  ): void {
+    if (
+      !NOW_PARSER_FAILURES.includes(reason) ||
+      !Number.isSafeInteger(lineIndex) ||
+      lineIndex < 0 ||
+      lineIndex > 99
+    )
+      return;
+    this.item(lineIndex);
+    this.note("items", reason);
+    this.events[this.events.length - 1].lineIndex = lineIndex;
+  }
+  walletFundingExcluded(count: number): void {
+    if (!Number.isSafeInteger(count) || count < 1) return;
+    this.note("list", "LIST_WALLET_FUNDING_EXCLUDED", count);
+    // Excluded funding records have no merchandise-order index or facts.
+    this.events[this.events.length - 1].orderIndex = undefined;
+  }
+  listAudit(reason: "LIST_DIGITAL_UPGRADE_EXCLUDED" | "LIST_ORDER_UNRESOLVED", count: number): void {
+    if (!Number.isSafeInteger(count) || count < 1) return;
+    this.note("list", reason, count);
+    this.events[this.events.length - 1].orderIndex = undefined;
+  }
   browserVersion(version: string | undefined): void {
     if (version && /^\d+(?:\.\d+){1,3}$/.test(version))
       this.chromiumVersion = version;
@@ -587,6 +681,7 @@ export class FailureDiagnostics {
     this.captureItems(summary.cancelledItems ?? []);
     this.captureAdjustments([]);
     this.extractionSource = undefined;
+    this.orderTotalSource = undefined;
     this.lineIndex = undefined;
     this.adjustmentIndex = undefined;
     this.reconciliation = undefined;
@@ -606,7 +701,8 @@ export class FailureDiagnostics {
     this.captureItems(detail.items);
     this.captureAdjustments(detail.adjustments);
     this.extractionSource = source(detail.extractionSource);
-    if (detail.orderTotalSource === "order-detail-grand-total") {
+    if (detail.orderTotalSource === "order-detail-grand-total" || detail.orderTotalSource === "amazon-now-you-pay") {
+      this.orderTotalSource = detail.orderTotalSource;
       this.authoritativeTotal(detail.orderTotal);
     }
   }
@@ -709,6 +805,7 @@ export class FailureDiagnostics {
       items: this.items,
       adjustments: this.adjustments,
       extractionSource: this.extractionSource,
+      orderTotalSource: this.orderTotalSource,
       reconciliation: this.reconciliation,
       events: this.events,
       timings: [
@@ -778,13 +875,18 @@ async function privateDirectory(directory: string): Promise<string> {
   if (process.platform === "win32") {
     // POSIX modes do not restrict Windows ACLs. Replace the directory ACL with
     // the current user's SID only; children inherit it. Paths are data, not code.
+    // A PowerShell 7 -> Node parent can pass Core modules in PSModulePath.
+    // Import this Desktop child's built-in module explicitly, failing closed.
+    // Rethrow module errors so a script-module failure cannot resume at ACL work.
+    // Persist only our modified owner/DACL. Set-Acl copies auditing too and can
+    // require SeSecurityPrivilege when this directory is already protected.
     await promisify(execFile)(
       "powershell.exe",
       [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        '$u=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $a=New-Object System.Security.AccessControl.DirectorySecurity; $a.SetOwner($u); $a.SetAccessRuleProtection($true,$false); $r=New-Object System.Security.AccessControl.FileSystemAccessRule($u,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $a.AddAccessRule($r); Set-Acl -LiteralPath $env:AMAZON_DIAGNOSTIC_ACL_PATH -AclObject $a -ErrorAction Stop',
+        'try { Import-Module (Join-Path $PSHOME "Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1") -ErrorAction Stop } catch { throw }; $u=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $a=New-Object System.Security.AccessControl.DirectorySecurity; $a.SetOwner($u); $a.SetAccessRuleProtection($true,$false); $r=New-Object System.Security.AccessControl.FileSystemAccessRule($u,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $a.AddAccessRule($r); try { [System.IO.Directory]::SetAccessControl($env:AMAZON_DIAGNOSTIC_ACL_PATH,$a) } catch { throw }',
       ],
       {
         env: { ...process.env, AMAZON_DIAGNOSTIC_ACL_PATH: absolute },

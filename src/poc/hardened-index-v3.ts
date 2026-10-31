@@ -15,6 +15,11 @@ import { OrderHeader } from "../core/types/order";
 
 import { DiagnosticError, FailureDiagnostics } from "./failure-diagnostics";
 import { extractDetailOrderTotal, extractHeaderOrderTotal } from "./order-total";
+import { discoverNowLink, extractNowOrder } from "./amazon-now";
+import { recordWalletCardDiagnostic } from "./wallet-card-diagnostics";
+import { classifyWalletFundingCard } from "./wallet-card-classification";
+import { listedOrderId } from "./order-identifiers";
+import { verifyDigitalUpgrade } from "./digital-upgrade";
 
 const REGION = "in";
 const DOMAIN = "amazon.in";
@@ -39,6 +44,7 @@ export type MinimalOrder = {
   orderTotal?: ReturnType<typeof safeMoney>;
   status?: "cancelled";
   cancelledItems?: CancelledOrderListItem[];
+  nowDetailUrl?: string;
 };
 
 export type ListedOrder = Omit<MinimalOrder, "orderDateKey">;
@@ -56,7 +62,7 @@ export interface OrderAdjustment {
   type: AdjustmentType;
   label: string;
   amount: ReturnType<typeof safeMoney>;
-  extractionSource: "order-detail-summary";
+  extractionSource: "order-detail-summary" | "amazon-now-bill-summary";
 }
 
 const STRUCTURAL_TOTAL_LABEL =
@@ -229,13 +235,7 @@ function parseOrderDateFromText(text: string): number | null {
 }
 
 function parseOrderIdFromText(text: string): string | null {
-  const standard = text.match(/\b(\d{3}-\d{7}-\d{7})\b/);
-  if (standard) return standard[1];
-
-  const uuid = text.match(
-    /\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\b/i,
-  );
-  return uuid ? uuid[1] : null;
+  return listedOrderId(text) ?? null;
 }
 
 async function extractCancelledOrderListItems(
@@ -350,12 +350,15 @@ function directHeader(orderId: string): OrderHeader {
   };
 }
 
+type ListedCardKind = { funding: boolean; digital?: "excluded" | "outside-window"; date: number; amount?: number };
+
 interface OrderPageSelection {
   startKey: number;
   endKey: number;
   orderOffset: number;
   maxOrders: number;
   previousOrders?: MinimalOrder[];
+  cardKinds?: Map<string, ListedCardKind>;
 }
 
 function assertMatchingListedFacts(
@@ -367,7 +370,8 @@ function assertMatchingListedFacts(
   if (
     previous.orderDate !== current.orderDate ||
     previous.status !== current.status ||
-    amount(previous) !== amount(current)
+    amount(previous) !== amount(current) ||
+    previous.nowDetailUrl !== current.nowDetailUrl
   ) {
     throw new DiagnosticError(
       "list", "LIST_DUPLICATE_CONFLICT",
@@ -381,22 +385,199 @@ export async function parseCurrentOrderPage(
   diagnostics?: FailureDiagnostics,
   selection?: OrderPageSelection,
 ): Promise<MinimalOrder[]> {
+  return (await readCurrentOrderPage(targetPage, diagnostics, selection)).orders;
+}
+
+async function readCurrentOrderPage(
+  targetPage: Page,
+  diagnostics?: FailureDiagnostics,
+  selection?: OrderPageSelection,
+): Promise<{ orders: MinimalOrder[]; dates: number[] }> {
   const cards = targetPage.locator(ORDER_CARD_SELECTOR);
   const count = await cards.count();
   const dedupe = new Map<string, MinimalOrder>();
   const known = new Map(selection?.previousOrders?.map((order) => [order.orderId, order]));
   const selectedIndexes = new Map(selection?.previousOrders?.map((order, index) => [order.orderId, index]));
   const previousCount = selectedIndexes.size;
+  const cardKinds = selection?.cardKinds ?? new Map<string, ListedCardKind>();
+  const dates: number[] = [];
+  function unresolved(
+    reason:
+      | "LIST_FACTS_MISSING"
+      | "LIST_ORDER_UNRESOLVED" = "LIST_ORDER_UNRESOLVED",
+  ): never {
+    diagnostics?.listAudit("LIST_ORDER_UNRESOLVED", 1);
+    throw new DiagnosticError(
+      "list",
+      reason,
+      "A visible order card could not be independently accounted for.",
+    );
+  }
 
   for (let i = 0; i < count; i++) {
     const card = cards.nth(i);
     if (!(await card.isVisible())) continue;
     const text = await card.innerText({ timeout: 1500 }).catch(() => "");
-    if (!text) continue;
+    const nested = await card.evaluate(
+      (root, selector) => Boolean(root.parentElement?.closest(selector)),
+      ORDER_CARD_SELECTOR,
+    );
+    if (nested) {
+      // The broad legacy selector also matches nested product links/widgets.
+      // They are not independent order records. A record-shaped nested card is
+      // unsupported and must fail rather than borrow its parent's identity/date.
+      if (
+        (await card
+          .locator('.order-header,.order-info,[data-component="orderHeader"]')
+          .count()) ||
+        parseOrderDateFromText(text) !== null ||
+        /\border\s*(?:#|ID\s*:|number\s*:)|\b[A-Z0-9]{3}-\d{7}-\d{7}\b/i.test(
+          text,
+        )
+      )
+        unresolved();
+      continue;
+    }
+    if (!text) unresolved("LIST_FACTS_MISSING");
 
-    const orderId = parseOrderIdFromText(text);
+    let identityText = text;
+    const headers = card.locator(
+      '.order-header,.order-info,[data-component="orderHeader"]',
+    );
+    const visibleHeaders: string[] = [];
+    for (let h = 0; h < (await headers.count()); h++)
+      if (await headers.nth(h).isVisible())
+        visibleHeaders.push(await headers.nth(h).innerText());
+    // An ordinary card can mention another order in its body. Its independently
+    // declared header owns selection; an unfamiliar declared header cannot fall
+    // back to a convenient recognized ID elsewhere in that body.
+    if (
+      visibleHeaders.length === 1 &&
+      (parseOrderIdFromText(visibleHeaders[0]) ||
+        /\border\s*(?:#|ID\b|number\b)/i.test(visibleHeaders[0]))
+    )
+      identityText = visibleHeaders[0];
+    const orderId = parseOrderIdFromText(identityText);
     const orderDateKey = parseOrderDateFromText(text);
-    if (!orderId || orderDateKey === null) continue;
+    if (!orderId || orderDateKey === null) unresolved("LIST_FACTS_MISSING");
+    try {
+      if (parseInputDate(keyToIso(orderDateKey)) !== orderDateKey) unresolved();
+    } catch {
+      unresolved();
+    }
+    dates.push(orderDateKey);
+    if (orderId.startsWith("D01-")) {
+      const previous = cardKinds.get(orderId);
+      if (
+        previous &&
+        (!previous.digital ||
+          previous.date !== orderDateKey ||
+          (previous.digital === "excluded" && previous.amount !== 0))
+      ) {
+        diagnostics?.listAudit("LIST_ORDER_UNRESOLVED", 1);
+        throw new DiagnosticError(
+          "list",
+          "LIST_DUPLICATE_CONFLICT",
+          "Digital order cards conflict.",
+        );
+      }
+      const inWindow =
+        !selection ||
+        (orderDateKey >= selection.startKey &&
+          orderDateKey <= selection.endKey);
+      if (inWindow) {
+        if (
+          !previous &&
+          [...cardKinds.values()].some((kind) => kind.digital === "excluded")
+        )
+          unresolved();
+        try {
+          await verifyDigitalUpgrade(
+            targetPage,
+            card,
+            orderId,
+            keyToIso(orderDateKey),
+            requireAuthentication,
+          );
+        } catch (error) {
+          diagnostics?.listAudit("LIST_ORDER_UNRESOLVED", 1);
+          throw error;
+        }
+        cardKinds.set(orderId, {
+          funding: false,
+          digital: "excluded",
+          date: orderDateKey,
+          amount: 0,
+        });
+        if (!previous)
+          diagnostics?.listAudit(
+            "LIST_DIGITAL_UPGRADE_EXCLUDED",
+            [...cardKinds.values()].filter(
+              (kind) => kind.digital === "excluded",
+            ).length,
+          );
+      } else
+        cardKinds.set(orderId, {
+          funding: false,
+          digital: "outside-window",
+          date: orderDateKey,
+        });
+      continue;
+    }
+    const candidateIndex =
+      selectedIndexes.get(orderId) ??
+      (selection?.orderOffset ?? 0) + selectedIndexes.size - previousCount;
+    const inspectKind =
+      !selection ||
+      candidateIndex < selection.maxOrders ||
+      selectedIndexes.has(orderId) ||
+      cardKinds.has(orderId);
+    const wallet = inspectKind
+      ? await classifyWalletFundingCard(
+          card,
+          text,
+          orderId,
+          ORDER_CARD_SELECTOR,
+        )
+      : "not-observed";
+    const funding = wallet === "funding-only";
+    const fundingTotal = funding
+      ? await extractHeaderOrderTotal(card)
+      : undefined;
+    const fundingAmount =
+      fundingTotal === undefined
+        ? undefined
+        : Math.round(fundingTotal.amount * 100);
+    const previousKind = cardKinds.get(orderId);
+    if (
+      (previousKind &&
+        (previousKind.funding !== funding ||
+          previousKind.digital ||
+          (funding &&
+            (previousKind.date !== orderDateKey ||
+              previousKind.amount !== fundingAmount)))) ||
+      (funding && known.has(orderId))
+    ) {
+      throw new DiagnosticError(
+        "list",
+        "LIST_DUPLICATE_CONFLICT",
+        "Duplicate order cards have conflicting facts or classification.",
+      );
+    }
+    if (inspectKind)
+      cardKinds.set(orderId, {
+        funding,
+        date: orderDateKey,
+        amount: fundingAmount,
+      });
+    if (funding) {
+      if (!previousKind) {
+        diagnostics?.walletFundingExcluded(
+          [...cardKinds.values()].filter((kind) => kind.funding).length,
+        );
+      }
+      continue;
+    }
 
     // Fully cancelled legacy cards omit totals and data-component item markup,
     // but retain paired image/title product links.
@@ -411,21 +592,39 @@ export async function parseCurrentOrderPage(
       status: cancelled ? "cancelled" : undefined,
       cancelledItems: cancelled ? cancelledItems : undefined,
     };
-    const orderIndex = selectedIndexes.get(orderId) ??
-      ((selection?.orderOffset ?? 0) + selectedIndexes.size - previousCount);
-    const selected = selectedIndexes.has(orderId) || !selection || (
-      orderDateKey >= selection.startKey &&
-      orderDateKey <= selection.endKey &&
-      orderIndex < selection.maxOrders
-    );
+    const orderIndex =
+      selectedIndexes.get(orderId) ??
+      (selection?.orderOffset ?? 0) + selectedIndexes.size - previousCount;
+    const selected =
+      selectedIndexes.has(orderId) ||
+      !selection ||
+      (orderDateKey >= selection.startKey &&
+        orderDateKey <= selection.endKey &&
+        orderIndex < selection.maxOrders);
     if (selected) {
       selectedIndexes.set(orderId, orderIndex);
       diagnostics?.select(order, orderIndex);
+      if (wallet === "unverified")
+        diagnostics?.note("list", "LIST_WALLET_LABEL_UNVERIFIED");
+      if (wallet === "unavailable")
+        diagnostics?.note("list", "LIST_WALLET_EVIDENCE_UNAVAILABLE");
+      await recordWalletCardDiagnostic(
+        card,
+        text,
+        ORDER_CARD_SELECTOR,
+        diagnostics,
+      );
       diagnostics?.at("list", "LIST_TOTAL_READ_FAILED");
+      order.nowDetailUrl = await discoverNowLink(
+        card,
+        targetPage.url(),
+        orderId,
+      );
       const total = await extractHeaderOrderTotal(card);
       if (!total && !cancelled) {
         throw new DiagnosticError(
-          "list", "LIST_TOTAL_MISSING",
+          "list",
+          "LIST_TOTAL_MISSING",
           "Order card has no independently validated header total.",
         );
       }
@@ -436,7 +635,7 @@ export async function parseCurrentOrderPage(
     if (!dedupe.has(orderId)) dedupe.set(orderId, previous ?? order);
   }
 
-  return [...dedupe.values()];
+  return { orders: [...dedupe.values()], dates };
 }
 
 async function getNextPageUrl(targetPage: Page): Promise<string | null> {
@@ -477,6 +676,7 @@ export async function listOrders(
     `https://www.${DOMAIN}/your-orders/orders?timeFilter=year-${year}&language=en_GB`;
   const matches: MinimalOrder[] = [];
   let pagesScanned = 0;
+  const cardKinds = new Map<string, ListedCardKind>();
 
   while (url && pagesScanned < MAX_PAGES && matches.length < maxOrders) {
     diagnostics?.at("list", "LIST_NAVIGATION_FAILED");
@@ -490,16 +690,18 @@ export async function listOrders(
     diagnostics?.at("list", "LIST_FACTS_MISSING");
 
     diagnostics?.listed(matches, pagesScanned + 1);
-    const pageOrders = await parseCurrentOrderPage(targetPage, diagnostics, {
+    const parsed = await readCurrentOrderPage(targetPage, diagnostics, {
       startKey,
       endKey,
       orderOffset: matches.length,
       maxOrders,
       previousOrders: matches,
+      cardKinds,
     });
+    const pageOrders = parsed.orders;
     pagesScanned += 1;
 
-    if (pageOrders.length === 0) {
+    if (parsed.dates.length === 0) {
       throw new DiagnosticError(
         "list",
         "LIST_FACTS_MISSING",
@@ -526,6 +728,11 @@ export async function listOrders(
 
   return {
     pagesScanned,
+    audit: {
+      digitalOrdersExcluded: [...cardKinds.values()].filter(kind => kind.digital === "excluded").length,
+      walletFundingExcluded: [...cardKinds.values()].filter(kind => kind.funding).length,
+      unresolvedOrders: 0,
+    },
     orders: matches.map(({ orderDateKey: _orderDateKey, ...order }) => order),
   };
 }
@@ -585,6 +792,19 @@ export async function extractOrderItems(
   const targetPage = await getPage(trace);
   trace?.at("detail", "DETAIL_NAVIGATION_FAILED");
   await requireAuthentication(targetPage);
+  if (listedOrder?.nowDetailUrl) {
+    if (listedOrder.orderId !== orderId) {
+      throw new DiagnosticError("detail", "DETAIL_ORDER_MISMATCH", "Selected order identity does not match.");
+    }
+    if (listedOrder.status === "cancelled") {
+      throw new DiagnosticError("detail", "NOW_EXTRACTION_FAILED", "Amazon Now cancellation requires independently supported order facts.");
+    }
+    trace?.provenance("amazon-now-order-details");
+    const detail = await extractNowOrder(targetPage, orderId, listedOrder.nowDetailUrl,
+      (authPage = targetPage) => requireAuthentication(authPage), trace, listedOrder.orderTotal);
+    trace?.detail(detail);
+    return detail;
+  }
   const header = directHeader(orderId);
 
   await targetPage.goto(header.detailUrl, {

@@ -19,6 +19,8 @@ import {
   listOrders,
   parseInputDate,
 } from "./hardened-index-v3";
+import { validateNowUrl } from "./amazon-now";
+import { NOW_LINE_TOTAL_ONLY } from "./now-line-total";
 
 const MAX_ORDERS = 50;
 const DEFAULT_MAX_ORDERS = 20;
@@ -71,7 +73,7 @@ export interface JsonAdjustment {
   label: string;
   amount: number;
   currency: "INR";
-  extractionSource: "order-detail-summary";
+  extractionSource: "order-detail-summary" | "amazon-now-bill-summary";
 }
 
 export interface JsonExport {
@@ -250,6 +252,7 @@ export function createExportDocument(
       "Export validation failed: invalid extraction timestamp.",
     );
 
+  const seenOrderIds = new Set<string>();
   const jsonOrders = orders.map((order, orderIndex): JsonOrder => {
     const { summary, detail } = order;
     diagnostics?.select(summary, orderIndex);
@@ -257,6 +260,7 @@ export function createExportDocument(
     diagnostics?.at("validation", "ORDER_FACTS_INVALID");
     if (
       !summary.orderId ||
+      seenOrderIds.has(summary.orderId) ||
       !summary.orderDate ||
       detail.orderId !== summary.orderId
     ) {
@@ -266,9 +270,11 @@ export function createExportDocument(
         "Export validation failed: missing or mismatched required order facts.",
       );
     }
+    seenOrderIds.add(summary.orderId);
     // Amazon publishes no monetary facts for this explicitly cancelled shape.
     // Nulls represent unavailable values without bypassing normal reconciliation.
     const cancelledWithoutMoney =
+      summary.nowDetailUrl === undefined &&
       summary.status === "cancelled" &&
       summary.orderTotal === undefined &&
       detail.orderTotal === undefined &&
@@ -279,10 +285,15 @@ export function createExportDocument(
       detail.items.every(
         (item) => item.unitPrice === undefined && item.itemTotal === undefined,
       );
-    if (!cancelledWithoutMoney && detail.orderTotalSource !== "order-detail-grand-total")
+    const nowOrder = detail.orderTotalSource === "amazon-now-you-pay" &&
+      detail.extractionSource === "amazon-now-order-details" && summary.nowDetailUrl !== undefined;
+    if (!cancelledWithoutMoney && (summary.nowDetailUrl !== undefined
+      ? !nowOrder : detail.orderTotalSource !== "order-detail-grand-total"))
       throw new DiagnosticError(
         "validation", "ORDER_TOTAL_INVALID",
-        "Export validation failed: order total requires the Order Details Grand Total source.",
+        summary.nowDetailUrl !== undefined
+          ? "Export validation failed: order total requires the Amazon Now You pay source."
+          : "Export validation failed: order total requires the Order Details Grand Total source.",
       );
     const orderTotal = cancelledWithoutMoney
       ? null
@@ -300,19 +311,31 @@ export function createExportDocument(
           "Export validation failed: invalid required item facts.",
         );
       }
+      const lineOnly = "extractionSource" in item && item.extractionSource === NOW_LINE_TOTAL_ONLY;
+      if (lineOnly) {
+        const proof = "verifiedLineTotal" in item ? item.verifiedLineTotal : undefined;
+        if (!nowOrder || summary.status === "cancelled" || cancelledWithoutMoney || item.unitPrice !== undefined ||
+            !Number.isSafeInteger(item.quantity) || item.quantity <= 1 || !proof || proof.orderId !== summary.orderId ||
+            proof.asin !== item.asin || !/^[A-Z0-9]{10}$/.test(item.asin ?? "") ||
+            proof.quantity !== item.quantity || !Number.isSafeInteger(proof.itemTotalPaise) || proof.itemTotalPaise < 0 ||
+            !item.itemTotal || item.itemTotal.currency !== CURRENCY ||
+            item.itemTotal.amount !== proof.itemTotalPaise / 100) {
+          throw new DiagnosticError("validation","UNIT_PRICE_INVALID","Verified Amazon Now line-total-only provenance is invalid.");
+        }
+      }
       return {
         lineIndex,
         asin: item.asin ?? "",
         productName: item.productName,
         quantity: item.quantity,
-        unitPrice: cancelledWithoutMoney
+        unitPrice: cancelledWithoutMoney || lineOnly
           ? null
           : numericMoney(item.unitPrice, "unit price"),
         itemTotal: cancelledWithoutMoney
           ? null
           : numericMoney(item.itemTotal, "item total"),
         currency: CURRENCY,
-        extractionSource: detail.extractionSource,
+        extractionSource: lineOnly ? NOW_LINE_TOTAL_ONLY : detail.extractionSource,
       };
     });
     if (items.length === 0)
@@ -359,7 +382,9 @@ export function createExportDocument(
       orderTotal,
       currency: CURRENCY,
       status: summary.status,
-      orderUrl: `https://www.amazon.in/gp/your-account/order-details?orderID=${encodeURIComponent(summary.orderId)}`,
+      orderUrl: nowOrder
+        ? validateNowUrl(summary.nowDetailUrl as string, summary.orderId)
+        : `https://www.amazon.in/gp/your-account/order-details?orderID=${encodeURIComponent(summary.orderId)}`,
       extractedAt,
       items,
       adjustments,

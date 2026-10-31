@@ -87,6 +87,15 @@ function rawCancelledOrder(orderId: string) {
 }
 
 describe("POC JSON export contract", () => {
+  test("rejects duplicate selected order IDs instead of publishing or deduplicating them", () => {
+    const order = rawOrder("111-2222222-3333333");
+    expect(() => createExportDocument(options, 1, [order, order], timestamp)).toThrow();
+  });
+  test("retains different order IDs even when merchandise and amounts are identical", () => {
+    const result = createExportDocument(options, 1, [rawOrder("111-2222222-3333333"), rawOrder("111-2222222-4444444")], timestamp);
+    expect(result.orders.map((order) => order.orderId)).toEqual(["111-2222222-3333333", "111-2222222-4444444"]);
+    expect(result.orders.map((order) => order.items[0].lineIndex)).toEqual([0, 0]);
+  });
   test("uses only the independently sourced detail gross when the list differs", () => {
     const order = rawOrder("408-0000000-0000001");
     order.summary.orderTotal.amount = 25;
