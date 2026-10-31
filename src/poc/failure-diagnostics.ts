@@ -863,13 +863,16 @@ async function privateDirectory(directory: string): Promise<string> {
   if (process.platform === "win32") {
     // POSIX modes do not restrict Windows ACLs. Replace the directory ACL with
     // the current user's SID only; children inherit it. Paths are data, not code.
+    // A PowerShell 7 -> Node parent can pass Core modules in PSModulePath.
+    // Import this Desktop child's built-in module explicitly, failing closed.
+    // Rethrow module errors so a script-module failure cannot resume at ACL work.
     await promisify(execFile)(
       "powershell.exe",
       [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        '$u=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $a=New-Object System.Security.AccessControl.DirectorySecurity; $a.SetOwner($u); $a.SetAccessRuleProtection($true,$false); $r=New-Object System.Security.AccessControl.FileSystemAccessRule($u,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $a.AddAccessRule($r); Set-Acl -LiteralPath $env:AMAZON_DIAGNOSTIC_ACL_PATH -AclObject $a -ErrorAction Stop',
+        'try { Import-Module (Join-Path $PSHOME "Modules\\Microsoft.PowerShell.Security\\Microsoft.PowerShell.Security.psd1") -ErrorAction Stop } catch { throw }; $u=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $a=New-Object System.Security.AccessControl.DirectorySecurity; $a.SetOwner($u); $a.SetAccessRuleProtection($true,$false); $r=New-Object System.Security.AccessControl.FileSystemAccessRule($u,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $a.AddAccessRule($r); Set-Acl -LiteralPath $env:AMAZON_DIAGNOSTIC_ACL_PATH -AclObject $a -ErrorAction Stop',
       ],
       {
         env: { ...process.env, AMAZON_DIAGNOSTIC_ACL_PATH: absolute },
