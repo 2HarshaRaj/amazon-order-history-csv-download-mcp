@@ -106,6 +106,7 @@ function fakeBrowser(scenario: Scenario) {
       count: async () => (isCard || isSummary ? 1 : 0),
       nth: () => ({
         isVisible: async () => true,
+        evaluate: async () => false, // top-level card ownership
         locator: (nestedSelector: string) =>
           nestedSelector.includes("/uff/")
             ? { count: async () => 0 }
@@ -113,6 +114,10 @@ function fakeBrowser(scenario: Scenario) {
                 count: async () => (scenario === "missing-total" ? 0 : 1),
                 nth: () => ({
                   isVisible: async () => true,
+                  innerText: async () =>
+                    scenario === "list-facts"
+                      ? "unrecognized synthetic card"
+                      : "Order placed 1 October 2026\n" + orderId,
                   getByText: () => ({
                     count: async () => (scenario === "ambiguous-total" ? 2 : 1),
                     nth: (index: number) => ({

@@ -547,6 +547,61 @@ without exception messages. No raw labels, DOM snapshots, balances, IDs, amounts
 paths or URLs are added by wallet events; existing private report handling is
 unchanged.
 
+### Audited free Alexa+ digital upgrade (Issue #22)
+
+List discovery recognizes canonical `D01-NNNNNNN-NNNNNNN` identifiers as well as
+numeric IDs and UUIDs. Recognition never grants eligibility or exclusion. A visible
+card with missing, malformed, unfamiliar or conflicting identifiers/dates stops
+the export; it cannot disappear through an identifier-parser miss.
+
+The owner policy in [Issue #22](https://github.com/2HarshaRaj/amazon-order-history-csv-download-mcp/issues/22)
+classifies the identified free Alexa-to-Alexa+ activation as a non-merchandise
+upgrade. Amazon's rendered page does not literally say `free upgrade`; that
+meaning comes from the explicit owner decision. `src/poc/digital-upgrade.ts`
+requires independent current evidence for the exact public catalogue service and
+seller, digital product-link presentation and zero charge. Neither the word
+Alexa, a D01 prefix nor an amount of zero supplies this proof by itself.
+
+The current card must own one matching D01 identity, valid in-window date, one
+complete exact service image/title pair, a uniquely owned details action and an
+unambiguous zero INR header total. Its independently opened detail page must keep
+that exact selected ID through all committed allowlisted URLs. The unique owned
+detail region must independently identify the same ID/date, one complete service
+row, the exact service ASIN and seller identity, the observed digital link form,
+an explicit current zero item price and both zero subtotal and `Total for this
+Order` declarations. Hidden, historical, extra, malformed or conflicting facts,
+unknown quantities, other merchandise and unavailable sources reject exclusion.
+The original card and header are revalidated after the separate detail read.
+Only the recognized screen-reader/visible copies inside the same owned price
+field may duplicate zero; their whitespace is presentation, not financial proof.
+
+At most one distinct qualifying upgrade is excluded in a requested window.
+Matching pagination duplicates are revalidated and counted once; another distinct
+digital activation or an unknown/charged digital product remains unresolved and
+stops publication. Exclusions consume no merchandise slot or line/order index,
+and an excluded-only page cannot stop pagination at the merchandise date cutoff.
+Outside-window D01 cards remain date-accounted and are not claimed as exclusions.
+There is no generalized digital purchase adapter or change to the merchandise
+JSON contract, Amazon Now parsing, wallet proof, reconciliation or atomic output.
+
+The internal list result's aggregate `audit` reports `digitalOrdersExcluded`,
+`walletFundingExcluded` and `unresolvedOrders`. These counters are available to the
+owner-private monthly coverage audit and are not added to merchandise JSON.
+`LIST_DIGITAL_UPGRADE_EXCLUDED` counts unique verified exclusions; the first
+unresolved card emits `LIST_ORDER_UNRESOLVED` with count 1 before failure.
+Digital proof failures use `LIST_DIGITAL_UNVERIFIED`. These fixed categorical
+events have no merchandise index, raw order ID, product name, URL or DOM content.
+A zero unresolved count covers observed cards only: reaching an order/page cap
+does not establish complete-window coverage. The independent audit must also
+prove the pagination boundary and account for every in-window included or
+explicitly excluded card before claiming completeness.
+
+Tests use fictional orders and local intercepted HTML. Public catalogue identities
+bind the narrow policy; no owner's order identifier, real purchase fixture,
+address, payment data or authenticated HTML is committed. Private evidence and
+live validation results remain outside Git. No production exclusion configuration,
+PDF subsystem, synchronization or deployment is introduced.
+
 Issue #20 remains open for independent inspection of this correction. Any further
 owner-local evidence should contain only masked tag/role/stable-attribute
 structure, field meanings and uniqueness/visibility counts; do not share personal
