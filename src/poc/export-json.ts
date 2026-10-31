@@ -20,6 +20,7 @@ import {
   parseInputDate,
 } from "./hardened-index-v3";
 import { validateNowUrl } from "./amazon-now";
+import { NOW_LINE_TOTAL_ONLY } from "./now-line-total";
 
 const MAX_ORDERS = 50;
 const DEFAULT_MAX_ORDERS = 20;
@@ -310,19 +311,31 @@ export function createExportDocument(
           "Export validation failed: invalid required item facts.",
         );
       }
+      const lineOnly = "extractionSource" in item && item.extractionSource === NOW_LINE_TOTAL_ONLY;
+      if (lineOnly) {
+        const proof = "verifiedLineTotal" in item ? item.verifiedLineTotal : undefined;
+        if (!nowOrder || summary.status === "cancelled" || cancelledWithoutMoney || item.unitPrice !== undefined ||
+            !Number.isSafeInteger(item.quantity) || item.quantity <= 1 || !proof || proof.orderId !== summary.orderId ||
+            proof.asin !== item.asin || !/^[A-Z0-9]{10}$/.test(item.asin ?? "") ||
+            proof.quantity !== item.quantity || !Number.isSafeInteger(proof.itemTotalPaise) || proof.itemTotalPaise < 0 ||
+            !item.itemTotal || item.itemTotal.currency !== CURRENCY ||
+            item.itemTotal.amount !== proof.itemTotalPaise / 100) {
+          throw new DiagnosticError("validation","UNIT_PRICE_INVALID","Verified Amazon Now line-total-only provenance is invalid.");
+        }
+      }
       return {
         lineIndex,
         asin: item.asin ?? "",
         productName: item.productName,
         quantity: item.quantity,
-        unitPrice: cancelledWithoutMoney
+        unitPrice: cancelledWithoutMoney || lineOnly
           ? null
           : numericMoney(item.unitPrice, "unit price"),
         itemTotal: cancelledWithoutMoney
           ? null
           : numericMoney(item.itemTotal, "item total"),
         currency: CURRENCY,
-        extractionSource: detail.extractionSource,
+        extractionSource: lineOnly ? NOW_LINE_TOTAL_ONLY : detail.extractionSource,
       };
     });
     if (items.length === 0)

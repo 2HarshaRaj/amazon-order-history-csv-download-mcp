@@ -85,12 +85,25 @@ active rows, a count declaration or controls. Duplicate and overlapping active/
 unavailable identities, prices, hidden facts and incomplete rows reject extraction.
 No unavailable item, package count or refund notice supplies a price or adjustment.
 The remaining fulfilled merchandise must independently satisfy the selected order's
-line/unit count, Items total, exact listed You pay and reconciliation checks.
+purchased-unit count for the qualified `N items in order` presentation (and both
+line/unit counts for an unqualified declaration), Items total, exact listed You
+pay and reconciliation checks. Every distinct fulfilled row remains accounted for.
 
 Plain positive increasing `lower-upper g` descriptors use the existing bounded
 adjacent descriptor/period/purchased-unit proof. Endpoint comparison is exact in
 decimal strings and shared with piece-range validation. The pure snapshot parser
 still rejects unproven fragments; product names and quantities are not broadened.
+
+The independently observed `1 Pc` package metadata uses that same owned,
+current descriptor/period/explicit-purchased-unit proof. A package descriptor
+cannot supply purchased quantity. Multi-unit current amounts remain unqualified
+until the separate selected-order HTML printable summary independently matches
+every tracking ASIN, quantity and gross line total. The bounded source and JSON
+contract are documented in README's verified-line-total section. Only the proven
+unknown-unit row uses `unitPrice: null` and the per-item reserved source marker;
+no gross unit price is derived. Financial declaration ownership and reconciliation
+are unchanged, and unavailable, ambiguous or conflicting corroboration rejects
+the complete export while preserving prior output.
 
 ## Validation and remaining live evidence
 

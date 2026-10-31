@@ -10,6 +10,8 @@ import {
 } from "./failure-diagnostics";
 import { parseHeaderTotalText } from "./order-total";
 import type { OrderAdjustment } from "./hardened-index-v3";
+import { NOW_LINE_TOTAL_ONLY, NowPrintableProof, NowLineTotalItem, nowLinePaise,
+  readNowPrintableProof, validateNowPrintableProof } from "./now-line-total";
 
 const ID =
   /^(?:\d{3}-\d{7}-\d{7}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i;
@@ -123,6 +125,7 @@ const snapshotSchema = z
     singleLinePriceDomVerified: z.literal(true).optional(),
     // Internal dialog evidence only; never serialized into merchandise JSON.
     declaredItemCount: z.number().int().positive().max(100).optional(),
+    declaredItemCountIsUnits: z.literal(true).optional(),
     items: z
       .array(
         z
@@ -130,6 +133,7 @@ const snapshotSchema = z
             parts: z.array(z.string().min(1).max(500)).min(2).max(12),
             alts: z.array(z.string().max(500)).max(4),
             hrefs: z.array(z.string().max(1000)).max(4),
+            lineTotalCandidateDomVerified: z.literal(true).optional(),
           })
           .strict(),
       )
@@ -154,8 +158,10 @@ export interface NowOrderDetail {
     asin: string;
     productName: string;
     quantity: number;
-    unitPrice: NowMoney;
+    unitPrice: NowMoney | undefined;
     itemTotal: NowMoney;
+    extractionSource?: typeof NOW_LINE_TOTAL_ONLY;
+    verifiedLineTotal?: NowLineTotalItem & { orderId: string };
   }>;
   adjustments: OrderAdjustment[];
 }
@@ -209,10 +215,12 @@ export function parseNowSnapshot(
   input: unknown,
   orderId: string,
   trace?: FailureDiagnostics,
+  printable?: NowPrintableProof,
 ): NowOrderDetail {
   const result = snapshotSchema.safeParse(input);
   if (!result.success) fail("ITEM_SHAPE_AMBIGUOUS");
   const facts = result.data;
+  const verified = printable === undefined ? undefined : validateNowPrintableProof(printable, orderId, printableCandidates(facts));
   if (
     !ID.test(orderId) ||
     normalizeNowDisplayedId(facts.orderIds[0]) !== orderId
@@ -303,8 +311,9 @@ export function parseNowSnapshot(
           ? "NOW_PARSE_NAME_DUPLICATE"
           : "NOW_PARSE_NAME_MISSING",
       );
-    let unitPrice: ReturnType<typeof money>;
+    let unitPrice: ReturnType<typeof money> | undefined;
     let itemTotal: ReturnType<typeof money>;
+    let verifiedLineTotal: (NowLineTotalItem & {orderId: string}) | undefined;
     if (quantity === 1 && prices.length === 1) {
       unitPrice = itemTotal = money(
         prices[0].replace(/^(?:unit price|item total|line total)\s*:\s*/i, ""),
@@ -357,6 +366,14 @@ export function parseNowSnapshot(
         currency: "INR",
         formatted: `Derived INR ${BigInt(unitPaise) / 100n}.${String(BigInt(unitPaise) % 100n).padStart(2, "0")}`,
       };
+    } else if (verified && facts.items[lineIndex].lineTotalCandidateDomVerified && facts.items.length > 1 && facts.declaredItemCountIsUnits &&
+      quantity > 1 && prices.length === 1 && /^(?:₹|INR\s+)/.test(prices[0])) {
+      const identity = snapshotIdentity({parts,alts,hrefs});
+      const proof = verified.items.find(item => item.asin === identity);
+      if (!proof || proof.quantity !== quantity || proof.itemTotalPaise !== nowLinePaise(prices[0])) fail("ITEM_SHAPE_AMBIGUOUS");
+      itemTotal = money(prices[0]);
+      unitPrice = undefined;
+      verifiedLineTotal = {...proof,orderId};
     } else {
       const units = prices.filter((part) => /^unit price\s*:/i.test(part));
       const totals = prices.filter((part) =>
@@ -391,7 +408,8 @@ export function parseNowSnapshot(
     const key = `${asin}:${productName}`;
     if (seen.has(key)) fail("ITEM_SHAPE_AMBIGUOUS");
     seen.add(key);
-    return { asin, productName, quantity, unitPrice, itemTotal };
+    return { asin, productName, quantity, unitPrice, itemTotal,
+      ...(verifiedLineTotal ? {extractionSource:NOW_LINE_TOTAL_ONLY,verifiedLineTotal} : {}) };
   });
   const actualPaise = [
     ...items.map((item) => item.itemTotal.amount),
@@ -417,6 +435,40 @@ export function parseNowSnapshot(
     items,
     adjustments,
   };
+}
+
+/** Product keys, quantities and line amounts are read only after full DOM ownership. */
+function snapshotIdentity(item: NowSnapshot["items"][number]): string {
+  const ids = new Set(item.alts.filter(alt => /^[A-Z0-9]{10}$/.test(alt)));
+  for (const href of item.hrefs) {
+    const match = /^https:\/\/(?:www\.)?amazon\.in\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:[/?]|$)/.exec(href);
+    if (match) ids.add(match[1]);
+  }
+  if (ids.size !== 1) return fail("ITEM_FACTS_INVALID");
+  return [...ids][0];
+}
+
+function printableCandidates(facts: NowSnapshot): NowLineTotalItem[] {
+  return facts.items.map(item => {
+    const fields = item.parts.filter(part => QUANTITY_SIGNAL.test(part));
+    if (fields.length !== 1) return fail("ITEM_FACTS_INVALID");
+    const quantity = explicitQuantity(fields[0], () => fail("ITEM_FACTS_INVALID"));
+    const prices = item.parts.filter(part => /₹|\bINR\b/i.test(part));
+    const totals = prices.length === 1 && /^(?:₹|INR\s+)/.test(prices[0]) ? prices :
+      prices.length === 2 ? prices.filter(part => /^(?:item|line) total\s*:/i.test(part)) : [];
+    if (totals.length !== 1) return fail("ITEM_SHAPE_AMBIGUOUS");
+    return {asin:snapshotIdentity(item),quantity,
+      itemTotalPaise:nowLinePaise(totals[0].replace(/^(?:item|line) total\s*:\s*/i,""))};
+  });
+}
+
+function needsPrintableProof(facts: NowSnapshot): boolean {
+  return facts.items.length > 1 && facts.declaredItemCountIsUnits === true && facts.items.some(item => {
+    const fields = item.parts.filter(part => QUANTITY_SIGNAL.test(part));
+    const prices = item.parts.filter(part => /₹|\bINR\b/i.test(part));
+    return fields.length === 1 && explicitQuantity(fields[0], () => fail("ITEM_FACTS_INVALID")) > 1 &&
+      item.lineTotalCandidateDomVerified === true && prices.length === 1 && /^(?:₹|INR\s+)/.test(prices[0]);
+  });
 }
 
 /** One bounded reader for independent tracking identity and the active sheet.
@@ -567,6 +619,7 @@ async function readNowDom(
         } else if (exact(root, /^Order Details$/i).length !== 1) abort();
         const nodes = elements(root);
         let declaredItemCount: number | undefined;
+        let declaredItemCountIsUnits: true | undefined;
         let countDeclaration: Element | undefined;
         if (selectedOrderScope) {
           // The dialog belongs to one independently listed order, regardless of
@@ -598,6 +651,7 @@ async function readNowDom(
             abort("NOW_ITEM_FIELDS_INVALID");
           countDeclaration = countDeclarations[0];
           declaredItemCount = Number(countMatch?.[1]);
+          if (/ in order$/i.test(countMatch?.[0] ?? "")) declaredItemCountIsUnits = true;
           if (
             !Number.isSafeInteger(declaredItemCount) ||
             declaredItemCount > 100
@@ -1547,7 +1601,7 @@ async function readNowDom(
           /^([1-9]\d*) Pcs \((?:Approx\. )?([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)\s*[-–]\s*([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g\)$/;
         // Discovery for hidden/historical conflicts only, never acceptance.
         const piecePackageSignal =
-          /^(?:[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*)?Pcs\b/i;
+          /^(?:[+-]?(?:\d[\d.,eE+-]*|\.\d+)\s*)?Pcs?\b/i;
         const pieceDescriptor = (value: string): boolean => {
           const pieces = piecePackage.exec(value);
           if (!pieces || !Number.isSafeInteger(Number(pieces[1]))) return false;
@@ -1556,6 +1610,7 @@ async function readNowDom(
           return increasingRange(pieces[2], pieces[3]);
         };
         const packageDescriptor = (value: string): boolean => {
+          if (value === "1 Pc") return true;
           if (packageSize.test(value) || pieceDescriptor(value)) return true;
           const range =
             /^([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)-([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g$/.exec(
@@ -1718,8 +1773,17 @@ async function readNowDom(
             )
               return abort();
           }
+          const quantity = quantityField.exec(parts[1] ?? "");
+          const purchased = Number(quantity?.[1] ?? quantity?.[2] ?? approximateQuantityField.exec(parts[1] ?? "")?.[3]);
+          const lineTotalCandidate = selectedOrderScope && declaredItemCountIsUnits === true && itemRoots.size > 1 && parts.length === 3 &&
+            Number.isSafeInteger(purchased) && purchased > 1 && /^(?:₹|INR\s+)\s*[\d,]+(?:\.\d{1,2})?$/.test(parts[2]);
+          if (lineTotalCandidate && (row.querySelector('[data-component="unitPrice"]') || elements(row).some(el => current(el) &&
+              [el.getAttribute("aria-label"),el.getAttribute("title")].some(label => label &&
+                (/₹|\bINR\b/i.test(label) || /unit\s*price|per\s*unit/i.test(label)) &&
+                label.replace(/\s/g,"") !== parts[2].replace(/\s/g,""))))) return abort();
           return {
             parts,
+            ...(lineTotalCandidate ? {lineTotalCandidateDomVerified:true as const} : {}),
             alts: images
               .filter((el) => row.contains(el))
               .map((el) => el.getAttribute("alt") ?? ""),
@@ -1862,6 +1926,7 @@ async function readNowDom(
           billRows,
           items,
           ...(declaredItemCount !== undefined ? { declaredItemCount } : {}),
+          ...(declaredItemCountIsUnits ? {declaredItemCountIsUnits} : {}),
           ...(singleLinePriceDomVerified
             ? { singleLinePriceDomVerified: true as const }
             : {}),
@@ -2055,8 +2120,8 @@ async function readAlternateAction(
 }
 
 /** Validate one selected order's independent count and bill. No delivery merge.
- * Unqualified counts are accepted only when line and unit interpretations agree;
- * unresolved multi-unit count semantics must not authorize incomplete coverage.
+ * Qualified "in order" counts denote purchased units; unqualified declarations
+ * still require line/unit agreement. Full DOM row ownership is always required.
  */
 export function validateNowSelectedOrder(
   facts: NowSnapshot,
@@ -2069,7 +2134,7 @@ export function validateNowSelectedOrder(
     !count ||
     !Number.isSafeInteger(count) ||
     count > 100 ||
-    count !== detail.items.length ||
+    (!facts.declaredItemCountIsUnits && count !== detail.items.length) ||
     count !== units ||
     facts.items.length !== detail.items.length
   )
@@ -2117,7 +2182,7 @@ export async function extractNowOrder(
   page: Page,
   orderId: string,
   outerUrl: string,
-  authenticate: () => Promise<void>,
+  authenticate: (page?: Page) => Promise<void>,
   trace?: FailureDiagnostics,
   listedTotal?: { amount: number; currency: string },
 ): Promise<NowOrderDetail> {
@@ -2248,7 +2313,17 @@ export async function extractNowOrder(
     if (invalidNavigation || (await dialogs.count()) !== 1) fail();
     validateNowUrl(page.url(), orderId, "/tez/browse/orderTracking");
     at("NOW_PARSING");
-    const detail = parseNowSnapshot(facts, orderId, trace);
+    const printable = needsPrintableProof(facts)
+      ? await readNowPrintableProof(page,orderId,printableCandidates(facts),authenticate) : undefined;
+    // The original tracking page/dialog must remain the same while a separate
+    // read-only printable tab corroborates the line totals.
+    if (invalidNavigation || (await dialogs.count()) !== 1) fail();
+    validateNowUrl(page.url(),orderId,"/tez/browse/orderTracking");
+    if (printable) {
+      const fresh = await readNowDom(dialogs.first(),orderId,"dialog",trace,actionProof !== undefined);
+      if (JSON.stringify(fresh) !== JSON.stringify(facts)) fail("ITEM_SHAPE_AMBIGUOUS");
+    }
+    const detail = parseNowSnapshot(facts, orderId, trace, printable);
     if (actionProof !== undefined)
       validateNowSelectedOrder(facts, detail, listedTotal);
     return detail;

@@ -3051,7 +3051,7 @@ browserTests("integrated Amazon Now extraction", () => {
       html = singleLineOrder
         .replaceAll("₹18.50", price)
         .replace("2 units", quantity);
-      expect((await extract()).items[0].unitPrice.amount).toBe(amount);
+      expect((await extract()).items[0].unitPrice?.amount).toBe(amount);
     },
   );
   test.each(["quantity one", "labelled multi-unit"])(
@@ -3063,7 +3063,7 @@ browserTests("integrated Amazon Now extraction", () => {
         html += `<script>document.querySelector('#single-price').innerHTML='<div>Unit price: ₹9.25</div><div>Line total: ₹18.50</div>';</script>`;
       html += `<script>document.querySelector('#single-handling').innerHTML='Handling fee ₹1.00'; document.querySelector('#single-you-pay span').textContent='₹19.51';</script>`;
       const detail = await extract();
-      expect(detail.items[0].unitPrice.formatted).not.toContain("Derived");
+      expect(detail.items[0].unitPrice?.formatted).not.toContain("Derived");
       expect(detail.adjustments[0].amount?.amount).toBe(1);
       expect(detail.orderTotal.amount).toBe(19.51);
     },
@@ -3126,7 +3126,7 @@ browserTests("integrated Amazon Now extraction", () => {
         i === 2 ? "" : `B0GRAM${String(i + 1).padStart(4, "0")}`,
       ),
     );
-    expect(detail.items.map((item) => item.unitPrice.amount)).toEqual(prices);
+    expect(detail.items.map((item) => item.unitPrice?.amount)).toEqual(prices);
     expect(detail.items.map((item) => item.itemTotal.amount)).toEqual(prices);
     expect(detail.adjustments.map((item) => item.amount?.amount)).toEqual([
       4, -3,
@@ -3257,7 +3257,7 @@ browserTests("integrated Amazon Now extraction", () => {
       "B0PIEC0004",
       "B0PIEC0005",
     ]);
-    expect(detail.items.map((item) => item.unitPrice.amount)).toEqual([
+    expect(detail.items.map((item) => item.unitPrice?.amount)).toEqual([
       8, 12, 16, 20, 24,
     ]);
     expect(detail.items.map((item) => item.itemTotal.amount)).toEqual([
@@ -3429,7 +3429,7 @@ browserTests("integrated Amazon Now extraction", () => {
       ),
     );
     expect(detail.items.map((item) => item.quantity)).toEqual(Array(8).fill(1));
-    expect(detail.items.map((item) => item.unitPrice.amount)).toEqual(
+    expect(detail.items.map((item) => item.unitPrice?.amount)).toEqual(
       Array.from({ length: 8 }, (_, i) => i + 14),
     );
     expect(detail.items.map((item) => item.itemTotal.amount)).toEqual(
@@ -3644,7 +3644,7 @@ browserTests("integrated Amazon Now extraction", () => {
       const detail = await extract();
       expect(detail.items).toHaveLength(23);
       expect(detail.items[0].quantity).toBe(mode === "two units" ? 2 : 1);
-      expect(detail.items[0].unitPrice.amount).toBe(
+      expect(detail.items[0].unitPrice?.amount).toBe(
         mode === "two units" ? 5.5 : 11,
       );
       expect(detail.items[0].itemTotal.amount).toBe(11);

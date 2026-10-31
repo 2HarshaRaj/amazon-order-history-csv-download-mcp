@@ -151,6 +151,7 @@ interface ItemFacts {
   quantity: number;
   unitPrice?: MoneyFact;
   itemTotal?: MoneyFact;
+  extractionSource?: string;
 }
 interface SummaryFacts {
   orderId: string;
@@ -187,6 +188,7 @@ interface ItemEvidence {
   quantity?: number;
   unitPricePaise?: number;
   itemTotalPaise?: number;
+  extractionSource?: string;
 }
 interface AdjustmentEvidence {
   adjustmentIndex: number;
@@ -402,6 +404,7 @@ const failureReportSchema: z.ZodType<FailureReport> = z
             quantity: countSchema.positive().optional(),
             unitPricePaise: paiseSchema.optional(),
             itemTotalPaise: paiseSchema.optional(),
+            extractionSource: z.literal("amazon-now-verified-line-total-only").optional(),
           })
           .strict(),
       )
@@ -532,6 +535,7 @@ function itemFacts(item: ItemFacts, lineIndex: number): ItemEvidence {
         : undefined,
     unitPricePaise: paise(item.unitPrice),
     itemTotalPaise: paise(item.itemTotal),
+    extractionSource: item.extractionSource === "amazon-now-verified-line-total-only" ? item.extractionSource : undefined,
   };
 }
 

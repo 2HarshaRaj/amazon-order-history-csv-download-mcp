@@ -316,7 +316,7 @@ browserTests("Amazon Now bounded recovery", () => {
         i.asin,
         i.productName,
         i.quantity,
-        i.unitPrice.amount,
+        i.unitPrice?.amount,
         i.itemTotal.amount,
       ]),
     ).toEqual([

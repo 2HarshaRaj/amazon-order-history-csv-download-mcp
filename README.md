@@ -105,7 +105,8 @@ The UTF-8 JSON contains `metadata` (`windowStart`, `windowEnd`, and the actual
 separate order with its date, numeric INR total, Amazon.in detail URL,
 extraction timestamp, and item lines. Each item contains a deterministic
 zero-based `lineIndex`, optional/empty ASIN, product name, numeric quantity,
-numeric unit and line totals, `INR`, and its safe extraction source. The export
+numeric unit and line totals (subject to the two constrained null-money cases
+documented below), `INR`, and its safe extraction source. The export
 fails closed before file creation if a required fact is absent or invalid.
 
 For conventional priced orders, `orderTotal` comes only from an explicit, visible `Grand Total`
@@ -164,15 +165,77 @@ existing singular/plural behavior is retained. Missing, hidden, historical,
 repeated (including mixed formats), malformed or ambiguously owned declarations
 fail closed. Product names, tab labels, controls and tracking previews cannot
 provide the independent count; unsupported suffixes never authorize extraction.
-The observed `in order` wording supports this narrow compatibility correction,
-but the precise seventh-order label and successful live extraction remain unverified.
-The observed declaration's line-versus-unit meaning has not been independently
-established. This correction accepts it only when **both** the validated line
-count and purchased-unit sum agree with it. When those interpretations differ,
-extraction fails rather than guessing what Amazon meant. Multi-unit alternate
-orders with an unqualified count remain unsupported pending owner-local evidence;
-the existing ordinary quantity and single-line price-derivation paths retain
-their behavior. The declaration never invents missing merchandise.
+For the independently verified `in order` presentation, the declaration counts
+**purchased units**. It must equal the sum of explicit purchased quantities, while
+every distinct merchandise row remains present. Unqualified `N item(s)` still
+requires both the validated line count and purchased-unit sum to agree. Neither
+declaration supplies a missing quantity or authorizes omitted merchandise. The
+ordinary quantity and single-line price-derivation paths retain their behavior.
+
+The exact package descriptor `1 Pc` is supported only inside the existing owned,
+current descriptor/period/explicit-purchased-unit structure. It supplies neither
+a second product name nor a purchased quantity. Other spellings, hidden or
+historical fragments, extra controls and ambiguous ownership remain rejected.
+
+### Verified Amazon Now line totals without a known unit price
+
+A multi-line, selected-order purchase can contain a multi-unit row with one
+unqualified current amount. That amount cannot establish a gross unit price.
+The bounded reader in `src/poc/now-line-total.ts` may corroborate its gross **line
+total** using the same selected order's separate HTML printable summary. It uses
+the existing selected-order print URL, with an allowlisted final printable route,
+exact Order ID in every committed URL and independent rendered Order # labels.
+It never decodes a PDF or reads embedded application/session scripts.
+
+The printable merchandise region must have the recognized Quantity/Total column
+structure and complete current ownership of every product link, quantity and INR
+amount. Every tracking row must match exactly one printable ASIN, purchased
+quantity and line amount, with no missing, extra, duplicate, weighted, hidden,
+historical or conflicting row. All rows are checked even when only one needs
+the fallback. The original selected tracking dialog is read again after the
+separate page closes; changing facts reject extraction. A missing or inaccessible
+summary, ambiguous source, conflicting unit-price hint or disagreement fails
+closed. Names remain the exact validated tracking names; an ASIN match supplies
+cross-source product identity when the printable description differs.
+
+The observed nested printable layout also owns a separate image column, empty
+dividers and a status row per product. An image must match that printable product's
+full name. A status row must be empty or contain only the exact separately labelled
+`Refunded (N)` structure and one explicit negative INR amount: canonical positive
+count no greater than purchased quantity, and positive refund magnitude no greater
+than the original gross line. Hidden, incomplete, unsigned, duplicate, conflicting
+or unknown statuses reject corroboration. This status is accounted for so it cannot
+be mistaken for another merchandise row or the original Total. It never supplies
+a unit price, changes purchased quantity, reduces the gross line, or creates an
+export adjustment. Settlement/refund transaction extraction is outside this path.
+
+Only a completely owned multi-unit row in the qualified purchased-unit-count
+presentation, corroborated by this independent source, may export:
+
+```json
+{
+  "unitPrice": null,
+  "itemTotal": 13.01,
+  "extractionSource": "amazon-now-verified-line-total-only"
+}
+```
+
+This fictional amount illustrates that no division, averaging, zero substitution
+or rounding allocation produces a unit price. `itemTotal` remains a nonnegative
+numeric INR gross line amount, quantity remains a positive integer greater than
+one, and order total remains independently sourced and numeric. The marker is
+per item; ordinary rows retain their existing source and numeric unit price.
+Internal selected-order/ASIN/quantity/paise proof is required again at JSON
+validation and is never serialized. Items total, exact listed You pay agreement,
+full coverage and one-paise order reconciliation still have to pass before atomic
+publication. Confirmed unpriced cancellations retain their separate contract.
+
+Consumer coordination is tracked in
+[personal-automation-library Issue #242](https://github.com/2HarshaRaj/personal-automation-library/issues/242).
+Consumers must explicitly accept this marker with null unit price and numeric
+line total; the marker with a numeric unit price, or an unknown unit price without
+the marker, is invalid. This change does not authorize synchronization or
+deployment. The broader HTML snapshot library remains separate.
 
 The selected dialog must have one independently recognized **Bill summary**,
 **Items total** and effective **You pay**, with no hidden/conflicting identities
@@ -224,8 +287,7 @@ Fictional offline fixtures exercise a shared interface whose two original links
 automatically select separate seven-line and one-line orders, with independent
 identities, counts and bills. Their markup is test evidence, not a claim about
 live Amazon DOM. The owner-confirmed per-order model supersedes the earlier
-combined-manifest assumption. Live compatibility, count semantics beyond the
-unambiguous case and any other unsupported presentation require separate
+combined-manifest assumption. Other unsupported presentations require separate
 owner-local validation before acceptance is expanded.
 
 For Now, the independent billed total is the unique effective INR **Bill summary
@@ -401,12 +463,13 @@ caption is accepted only in its own bounded caption/icon group; the row must
 still declare a separate,
 unambiguous effective **Free** or INR charge. The caption cannot replace a missing
 charge or hide conflicting current values. Discounts/promotions remain separate
-rows with explicit negative INR amounts. Included/qualified fees, refunds outside
+rows with explicit negative INR amounts. Included/qualified fees, bill refunds outside
 the narrowly validated unavailable-item region, Now cancellations, unknown bill rows,
 ambiguous prices and unsupported layouts
 stop export. Separate funding sections never supply totals or adjustments.
-Now items use `amazon-now-order-details` provenance and adjustments use
-`amazon-now-bill-summary`; the JSON field structure and one-paise reconciliation
+Ordinary Now items use `amazon-now-order-details` provenance; only the independently
+verified unknown-unit rows described above use `amazon-now-verified-line-total-only`.
+Adjustments use `amazon-now-bill-summary`; the JSON field structure and one-paise reconciliation
 contract are unchanged. Safe failures use existing identity/validation codes or
 `NOW_EXTRACTION_FAILED`. Owner-local reports allowlist the distinct total source.
 

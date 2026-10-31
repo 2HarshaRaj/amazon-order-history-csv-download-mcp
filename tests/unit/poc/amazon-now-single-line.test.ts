@@ -217,7 +217,7 @@ describe("Amazon Now independently corroborated single-line unit derivation", ()
     ["₹2", "2 units", 1],
   ])("exact paise %s and %s derive %s", (price, quantity, amount) => {
     expect(
-      parseNowSnapshot(fixture(price, quantity), id).items[0].unitPrice.amount,
+      parseNowSnapshot(fixture(price, quantity), id).items[0].unitPrice?.amount,
     ).toBe(amount);
   });
   test("explicit zero fees/discount/promotion do not become nonzero adjustments", () => {
@@ -280,7 +280,7 @@ describe("Amazon Now independently corroborated single-line unit derivation", ()
     const f = fixture("₹18.50", "1 unit");
     delete f.singleLinePriceDomVerified;
     f.billRows = ["Items total ₹18.50", "Handling fee ₹1.00", "You pay ₹19.51"];
-    expect(parseNowSnapshot(f, id).items[0].unitPrice.formatted).toBe("₹18.50");
+    expect(parseNowSnapshot(f, id).items[0].unitPrice?.formatted).toBe("₹18.50");
   });
   test("labelled multi-unit prices retain their normal adjustment/reconciliation path", () => {
     const f = fixture();
@@ -292,6 +292,6 @@ describe("Amazon Now independently corroborated single-line unit derivation", ()
       "Line total: ₹18.50",
     ];
     f.billRows = ["Items total ₹18.50", "Handling fee ₹1.00", "You pay ₹19.51"];
-    expect(parseNowSnapshot(f, id).items[0].unitPrice.formatted).toBe("₹9.25");
+    expect(parseNowSnapshot(f, id).items[0].unitPrice?.formatted).toBe("₹9.25");
   });
 });
