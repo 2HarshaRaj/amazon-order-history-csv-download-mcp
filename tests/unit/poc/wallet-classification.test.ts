@@ -1,6 +1,6 @@
+import { makeTestDirectory } from "../../helpers/temp-directory";
 import type { Locator } from "playwright";
-import { mkdtemp, readFile, readdir, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, readdir, rm } from "fs/promises";
 import { join } from "path";
 import { classifyWalletFundingCard } from "../../../src/poc/wallet-card-classification";
 import {
@@ -111,7 +111,7 @@ describe("wallet classification transport and private exclusion events", () => {
   test("persisted exclusion evidence contains only a count, no funding facts", async () => {
     const trace = new FailureDiagnostics();
     trace.walletFundingExcluded(2);
-    const directory = await mkdtemp(join(tmpdir(), "wallet-excluded-report-"));
+    const directory = await makeTestDirectory("wallet-excluded-report-");
     try {
       await writeFailureReport(
         trace.report(new Error("PRIVATE_ERROR")),

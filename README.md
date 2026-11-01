@@ -1010,6 +1010,15 @@ npm run typecheck
 npm run lint
 ```
 
+Synthetic diagnostic/export tests create fresh directories beneath the canonical
+OS temporary root through `tests/helpers/temp-directory.ts`. This avoids Windows
+8.3 TEMP aliases without changing TEMP, Git newline settings, or the production
+diagnostic writer's strict path, repository, ACL and atomic-publication checks.
+Native Windows tests also reject noncanonical aliases and junctions and verify
+first/repeated owner-only report writes. Wallet adversarial fixtures exercise
+both LF and CRLF explicitly. These tests do not access authenticated Amazon
+profiles or Google Sheets.
+
 ### Testing with MCP Inspector
 
 For development and debugging, use the official [MCP Inspector](https://github.com/modelcontextprotocol/inspector) tool instead of running through an AI assistant. This provides:

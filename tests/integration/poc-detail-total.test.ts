@@ -1,7 +1,7 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Synthetic Chromium only. All requests intercepted; no persistent profile. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { chromium, Browser, BrowserContext, Page } from "playwright";
 import { extractDetailOrderTotal } from "../../src/poc/order-total";
@@ -419,9 +419,7 @@ browserTests("Order Details Grand Total authority", () => {
       if (mode === "mismatch")
         currentDetail = detailHtml.replaceAll("₹1,220.00", "₹1,219.98");
       useSyntheticContext();
-      const directory = await mkdtemp(
-        join(tmpdir(), "amazon-detail-authority-"),
-      );
+      const directory = await makeTestDirectory("amazon-detail-authority-");
       const output = join(directory, "orders.json");
       await writeFile(output, "prior complete export");
       const report = jest.fn(async (_report: unknown) => {});

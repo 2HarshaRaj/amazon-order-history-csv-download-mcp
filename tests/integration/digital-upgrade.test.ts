@@ -1,8 +1,8 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Fabricated order records, intercepted offline requests, no account profile. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
+import { readFile, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
-import { tmpdir } from "os";
 import { Browser, BrowserContext, Page, chromium } from "playwright";
 import { ALEXA_UPGRADE } from "../../src/poc/digital-upgrade";
 import {
@@ -452,7 +452,7 @@ browserTests("narrow owner-approved digital upgrade exclusion", () => {
     });
   });
   test("unresolved digital evidence preserves previous complete output atomically", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "digital-upgrade-")),
+    const directory = await makeTestDirectory("digital-upgrade-"),
       output = join(directory, "prior.json"),
       reports: unknown[] = [];
     try {

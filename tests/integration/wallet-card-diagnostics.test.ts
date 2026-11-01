@@ -1,7 +1,7 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Invented HTML only. No verified wallet classifier or exclusion rule exists. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { Browser, BrowserContext, Page, chromium } from "playwright";
 import {
@@ -317,7 +317,7 @@ browserTests(
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "wallet-purchase-"));
+      const directory = await makeTestDirectory("wallet-purchase-");
       const output = join(directory, "orders.json");
       try {
         await runExport({ ...options, output }, () => {}, {
@@ -341,7 +341,7 @@ browserTests(
       jest
         .spyOn(chromium, "launchPersistentContext")
         .mockResolvedValue(context);
-      const directory = await mkdtemp(join(tmpdir(), "wallet-failure-"));
+      const directory = await makeTestDirectory("wallet-failure-");
       const output = join(directory, "orders.json");
       const reports = join(directory, "reports");
       await writeFile(output, "prior complete export");

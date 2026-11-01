@@ -1,9 +1,9 @@
+import { makeTestDirectory } from "../../helpers/temp-directory";
 import { randomUUID } from "crypto";
 import { existsSync } from "fs";
 import files from "fs/promises";
 import childProcess, { ChildProcess } from "child_process";
 import {
-  mkdtemp,
   mkdir,
   readFile,
   readdir,
@@ -292,7 +292,7 @@ describe("allowlisted failure evidence", () => {
 describe("owner-local report store", () => {
   let directory: string;
   beforeEach(async () => {
-    directory = await mkdtemp(join(tmpdir(), "amazon-diagnostics-unit-"));
+    directory = await makeTestDirectory("amazon-diagnostics-unit-");
   });
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });

@@ -1,7 +1,7 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Headless local HTML fixtures only; never uses the persistent account profile. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { chromium, Browser, Page } from "playwright";
 import {
@@ -312,7 +312,7 @@ describeWithBrowser("Amazon.in gross totals from visible card headers", () => {
         orderDate: "2026-10-01",
         orderIndex: 3,
       });
-      const directory = await mkdtemp(join(tmpdir(), "amazon-total-report-"));
+      const directory = await makeTestDirectory("amazon-total-report-");
       try {
         await writeFailureReport(evidence, directory);
         expect(await readdir(directory)).toHaveLength(1);
@@ -350,7 +350,7 @@ describeWithBrowser("Amazon.in gross totals from visible card headers", () => {
     const [first, second] = await parseCurrentOrderPage(page);
     const trace = new FailureDiagnostics();
     trace.listed([first, second], 1);
-    const directory = await mkdtemp(join(tmpdir(), "amazon-total-mismatch-"));
+    const directory = await makeTestDirectory("amazon-total-mismatch-");
     const output = join(directory, "orders.json");
     await writeFile(output, "prior complete export");
     try {

@@ -1,6 +1,6 @@
+import { makeTestDirectory } from "../../helpers/temp-directory";
 import type { Locator } from "playwright";
-import { mkdtemp, readFile, readdir, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, readdir, rm } from "fs/promises";
 import { join } from "path";
 import {
   DiagnosticError,
@@ -178,7 +178,7 @@ describe("wallet label diagnostics never authorize classification", () => {
         selector,
         diagnostics,
       );
-      const directory = await mkdtemp(join(tmpdir(), "wallet-safe-report-"));
+      const directory = await makeTestDirectory("wallet-safe-report-");
       try {
         await writeFailureReport(
           diagnostics.report(

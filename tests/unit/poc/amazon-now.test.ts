@@ -1,5 +1,5 @@
-import { mkdtemp, readFile, readdir, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { makeTestDirectory } from "../../helpers/temp-directory";
+import { readFile, readdir, rm } from "fs/promises";
 import { join } from "path";
 import {
   NowSnapshot,
@@ -486,7 +486,7 @@ describe("Amazon Now fact validation (no Chromium)", () => {
     ).toThrow();
   });
   test("validation creates no output on incomplete Now orders", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "now-no-output-"));
+    const directory = await makeTestDirectory("now-no-output-");
     const detail = parseNowSnapshot(fixture(), id);
     detail.items[0].itemTotal.amount = 9;
     try {
@@ -516,7 +516,7 @@ describe("Amazon Now fact validation (no Chromium)", () => {
     expect(JSON.stringify(report)).not.toContain("private raw URL");
     expect(report.orderTotalSource).toBe("amazon-now-you-pay");
     expect(report.order?.orderTotalPaise).toBe(23000);
-    const directory = await mkdtemp(join(tmpdir(), "now-report-"));
+    const directory = await makeTestDirectory("now-report-");
     try {
       await writeFailureReport(report, directory);
       const names = await readdir(directory);

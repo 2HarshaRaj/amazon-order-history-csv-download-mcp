@@ -1,8 +1,8 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Fictional markup only; all requests intercepted, no persistent account profile. */
 import { existsSync, readFileSync } from "fs";
-import { mkdtemp, readFile, rm, writeFile, readdir } from "fs/promises";
+import { readFile, rm, writeFile, readdir } from "fs/promises";
 import { join } from "path";
-import { tmpdir } from "os";
 import { Browser, BrowserContext, Page, chromium } from "playwright";
 import { extractNowOrder } from "../../src/poc/amazon-now";
 import { NOW_LINE_TOTAL_ONLY } from "../../src/poc/now-line-total";
@@ -624,9 +624,7 @@ browserTests(
         jest
           .spyOn(chromium, "launchPersistentContext")
           .mockResolvedValue(context);
-        const directory = await mkdtemp(
-          join(tmpdir(), "fictional-line-export-"),
-        );
+        const directory = await makeTestDirectory("fictional-line-export-");
         const output = join(directory, "orders.json");
         await writeFile(output, "prior complete export");
         try {

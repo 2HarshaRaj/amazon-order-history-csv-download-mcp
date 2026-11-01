@@ -1,5 +1,5 @@
-import { mkdtemp, readFile, readdir, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { makeTestDirectory } from "../../helpers/temp-directory";
+import { readFile, readdir, rm } from "fs/promises";
 import { join } from "path";
 import type { Page } from "playwright";
 import { extractNowOrder } from "../../../src/poc/amazon-now";
@@ -310,7 +310,7 @@ describe("Amazon Now categorical diagnostics (synthetic transport)", () => {
   test.each([...NOW_CHECKPOINTS, ...NOW_DOM_FAILURES])(
     "persisted %s report contains only categorical additions",
     async (reason) => {
-      const directory = await mkdtemp(join(tmpdir(), "now-categorical-"));
+      const directory = await makeTestDirectory("now-categorical-");
       try {
         const trace = new FailureDiagnostics();
         // Retain order index 2 without supplying purchase facts to diagnostics.

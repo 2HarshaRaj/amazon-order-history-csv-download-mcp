@@ -1,6 +1,6 @@
+import { makeTestDirectory } from "../../helpers/temp-directory";
 /** Invented bounded snapshots only; no customer facts or browser access. */
-import { mkdtemp, readFile, readdir, rm } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, readdir, rm } from "fs/promises";
 import { join } from "path";
 import { NowSnapshot, parseNowSnapshot } from "../../../src/poc/amazon-now";
 import {
@@ -107,7 +107,7 @@ describe("Amazon Now parser failure attribution", () => {
         events: [{ stage: "items", reason, lineIndex: 2, orderIndex: 2 }],
         truncated: false,
       });
-      const directory = await mkdtemp(join(tmpdir(), "now-parser-report-"));
+      const directory = await makeTestDirectory("now-parser-report-");
       try {
         await writeFailureReport(report, directory);
         const names = await readdir(directory);
@@ -233,7 +233,7 @@ describe("Amazon Now parser failure attribution", () => {
     const report = trace.report(
       new DiagnosticError("items", "ITEM_FACTS_INVALID", sentinel),
     );
-    const directory = await mkdtemp(join(tmpdir(), "now-parser-safety-"));
+    const directory = await makeTestDirectory("now-parser-safety-");
     try {
       for (const extra of [
         { lineIndex: 100 },

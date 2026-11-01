@@ -1,8 +1,8 @@
+import { makeTestDirectory } from "../helpers/temp-directory";
 /** Synthetic pipeline integration: actual list/detail/validation/writers, a fake
  * Playwright transport, and temporary local files. Never opens a live browser. */
 import { existsSync } from "fs";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "fs/promises";
-import { tmpdir } from "os";
+import { mkdir, readFile, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { chromium, BrowserContext, Page } from "playwright";
 import * as items from "../../src/amazon/extractors/items";
@@ -209,9 +209,7 @@ describe("hardened POC failure diagnostics pipeline", () => {
   let reports: string;
   let logs: string[];
   beforeEach(async () => {
-    directory = await mkdtemp(
-      join(tmpdir(), "amazon-diagnostics-integration-"),
-    );
+    directory = await makeTestDirectory("amazon-diagnostics-integration-");
     output = join(directory, "orders.json");
     reports = join(directory, "reports");
     logs = [];
