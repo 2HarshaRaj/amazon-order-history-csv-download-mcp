@@ -141,6 +141,149 @@ browserTests("verified flight booking list exclusion", () => {
     expect((await listed()).orders.map((o) => o.orderId)).toEqual([purchaseId]);
     expect((await parse()).length).toBe(1);
   });
+  test.each([
+    "Booking cancelled",
+    "Booking canceled",
+    "Flight cancelled",
+    "Booking not successful",
+    "Booking pending",
+    "Booking failed",
+    "Your flight booking has been cancelled",
+    "Booking status: not confirmed",
+    "Cancelled",
+  ])(
+    "rejects independently owned secondary booking state: %s",
+    async (secondary) => {
+      html =
+        flight.replace("Fictional service confirmation", secondary) +
+        merchandise();
+      await expect(listed()).rejects.toMatchObject({
+        reason: "LIST_FLIGHT_UNVERIFIED",
+      });
+    },
+  );
+  test("a normal owned secondary confirmation permits exclusion", async () => {
+    const r = await listed();
+    expect(r.audit.flightBookingsExcluded).toBe(1);
+    expect(r.orders.map((o) => o.orderId)).toEqual([purchaseId]);
+  });
+  test("secondary itinerary confirmation and travel words do not declare a conflicting state", async () => {
+    html =
+      flight.replace(
+        "Fictional service confirmation",
+        "Flight itinerary confirmation sent; see the Cancelled Flights travel guide.",
+      ) + merchandise();
+    expect((await listed()).audit.flightBookingsExcluded).toBe(1);
+  });
+  test("a product description can mention booking cancellation without declaring booking status", async () => {
+    html =
+      flight.replaceAll(
+        "Invented service description",
+        "Booking cancelled: fictional travel guide",
+      ) + merchandise();
+    expect((await listed()).audit.flightBookingsExcluded).toBe(1);
+  });
+  test("ordinary merchandise with explicit booking/travel wording remains merchandise", async () => {
+    html = merchandise("Flight booking confirmation: a travel guide");
+    const r = await listed();
+    expect(r.audit.flightBookingsExcluded).toBe(0);
+    expect(r.orders.map((o) => o.orderId)).toEqual([purchaseId]);
+  });
+  test.each([
+    "el.hidden=true",
+    "el.style.display='none'",
+    "el.style.visibility='hidden'",
+    "el.style.opacity='0'",
+    "el.setAttribute('aria-hidden','true')",
+    "el.style.textDecoration='line-through'",
+  ])(
+    "hidden/historical contradictory status cannot be ignored: %s",
+    async (hiding) => {
+      html =
+        mutate(
+          "const el=document.querySelector('.yohtmlc-shipment-status-secondaryText');el.textContent='Booking cancelled';" +
+            hiding,
+        ) + merchandise();
+      await expect(listed()).rejects.toMatchObject({
+        reason: "LIST_FLIGHT_UNVERIFIED",
+      });
+    },
+  );
+  test("split status text cannot evade the contradictory declaration check", async () => {
+    html =
+      mutate(
+        "document.querySelector('.yohtmlc-shipment-status-secondaryText').innerHTML='<span>Booking</span><span>cancelled</span>'",
+      ) + merchandise();
+    await expect(listed()).rejects.toMatchObject({
+      reason: "LIST_FLIGHT_UNVERIFIED",
+    });
+  });
+  test("a hidden contradiction cannot be concealed by normal visible confirmation", async () => {
+    html =
+      mutate(
+        "document.querySelector('.yohtmlc-shipment-status-secondaryText').insertAdjacentHTML('beforeend','<span hidden>Booking cancelled</span>')",
+      ) + merchandise();
+    await expect(listed()).rejects.toMatchObject({
+      reason: "LIST_FLIGHT_UNVERIFIED",
+    });
+  });
+  test("an inner secondary status role still rejects a contradiction if its wrapper changes", async () => {
+    html =
+      mutate(
+        "document.querySelector('.yohtmlc-shipment-status-secondaryText').className='changed-wrapper';document.querySelector('.delivery-box__secondary-text').textContent='Booking cancelled'",
+      ) + merchandise();
+    await expect(listed()).rejects.toMatchObject({
+      reason: "LIST_FLIGHT_UNVERIFIED",
+    });
+  });
+  test("a secondary status cannot borrow a different delivery-box owner", async () => {
+    html =
+      mutate(
+        "const box=document.createElement('div');box.className='delivery-box';document.querySelector('.delivery-box').append(box);box.append(document.querySelector('.yohtmlc-shipment-status-secondaryText'))",
+      ) + merchandise();
+    await expect(listed()).rejects.toMatchObject({
+      reason: "LIST_FLIGHT_UNVERIFIED",
+    });
+  });
+  test("status roles cannot move into the product region and still supply booking evidence", async () => {
+    html =
+      mutate(
+        "document.querySelector('.yohtmlc-product-title a').append(document.querySelector('.yohtmlc-shipment-status-secondaryText'));document.querySelector('img').alt=document.querySelector('.yohtmlc-product-title a').textContent",
+      ) + merchandise();
+    await expect(listed()).rejects.toMatchObject({
+      reason: "LIST_FLIGHT_UNVERIFIED",
+    });
+  });
+  test("a conflicting later booking card is revalidated instead of accepted from the duplicate cache", async () => {
+    html = flight + next;
+    page2 =
+      flight.replace("Fictional service confirmation", "Booking cancelled") +
+      merchandise();
+    await expect(listed()).rejects.toMatchObject({
+      reason: "LIST_FLIGHT_UNVERIFIED",
+    });
+  });
+  test("a secondary contradiction introduced during the header read invalidates proof", async () => {
+    const original = totals.extractHeaderOrderTotal;
+    let changed = false;
+    jest
+      .spyOn(totals, "extractHeaderOrderTotal")
+      .mockImplementation(async (card) => {
+        const result = await original(card);
+        if (!changed && (await card.innerText()).includes(flightId)) {
+          changed = true;
+          await page
+            .locator(".yohtmlc-shipment-status-secondaryText")
+            .evaluate((el) => {
+              el.textContent = "Booking cancelled";
+            });
+        }
+        return result;
+      });
+    await expect(listed()).rejects.toMatchObject({
+      reason: "LIST_FLIGHT_UNVERIFIED",
+    });
+  });
   test("a numeric ID and missing item markup never authorize exclusion", async () => {
     html = merchandise("Flight booking");
     const r = await listed();

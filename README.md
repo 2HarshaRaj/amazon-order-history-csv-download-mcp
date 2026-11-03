@@ -585,6 +585,15 @@ status, header and action ownership, visibility, DOM bounds and complete item
 accounting must all agree, including revalidation around the header read. Direct
 evidence text is bounded separately from ignored inert script/style metadata. Missing, hidden, historical, extra or conflicting
 candidate evidence raises `LIST_FLIGHT_UNVERIFIED` and stops publication.
+Primary and secondary booking-status roles must independently belong to the same
+card and delivery box, outside the header and product region. A separately owned
+non-success declaration (such as `Booking cancelled` or `Booking pending`)
+rejects proof even when the primary still says `Booking successful`. Hidden,
+accessibility-hidden or historical contradictory declarations are conservative
+blockers, not discarded evidence. Status matching does not inspect itinerary or
+product descriptions; ordinary secondary confirmation and travel wording remain
+valid. The existing second read also checks status consistency again.
+
 Other booking states, services and changed layouts remain unsupported.
 
 Verified bookings consume no merchandise slot or order/line index. Pagination

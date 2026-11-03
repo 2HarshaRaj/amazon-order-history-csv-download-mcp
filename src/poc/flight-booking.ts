@@ -280,6 +280,49 @@ export async function verifyFlightBookingCard(
           )
         )
           return invalid;
+        // Only independently owned status roles declare booking state. Never scan
+        // itinerary/product text for travel words. A hidden contradictory declaration
+        // is still ambiguous evidence, so do not discard it as stale or non-current.
+        const statusFields = Array.from(
+          root.querySelectorAll(
+            ".yohtmlc-shipment-status-primaryText,.yohtmlc-shipment-status-secondaryText,.delivery-box__primary-text,.delivery-box__secondary-text",
+          ),
+        );
+        const nonSuccessState =
+          "(?:cancelled|canceled|pending|failed|unsuccessful|declined|rejected|expired|in\\s+progress|on\\s+hold|not\\s+(?:successful|confirmed))";
+        const contradictoryBooking = new RegExp(
+          "\\b(?:flight(?:\\s+booking)?|booking)(?:\\s+status)?\\s*:?\\s*(?:(?:is|was|has\\s+been)\\s+)?" +
+            nonSuccessState +
+            "\\b",
+          "i",
+        );
+        const contradictoryBareState = new RegExp(
+          "^" + nonSuccessState + "[.!]?$",
+          "i",
+        );
+        for (const field of statusFields) {
+          if (
+            field.closest(ownerSelector) !== root ||
+            field.closest(".delivery-box") !== delivery ||
+            header.contains(field) ||
+            item.contains(field) ||
+            field.contains(item)
+          )
+            return invalid;
+          // Direct text-node boundaries retain split declarations without borrowing
+          // text from another card or interpreting hidden content as positive proof.
+          const declaration = texts
+            .filter((t) => field.contains(t.owner))
+            .map((t) => t.text)
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+          if (
+            contradictoryBooking.test(declaration) ||
+            contradictoryBareState.test(declaration)
+          )
+            return invalid;
+        }
         const products = anchors.filter((a) =>
           /\/(?:dp|gp\/product)\//.test(url(a)?.pathname ?? ""),
         );
