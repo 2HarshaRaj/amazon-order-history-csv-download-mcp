@@ -106,7 +106,11 @@ function fakeBrowser(scenario: Scenario) {
       count: async () => (isCard || isSummary ? 1 : 0),
       nth: () => ({
         isVisible: async () => true,
-        evaluate: async () => false, // top-level card ownership
+        // Ordinary synthetic card: new flight DOM read explicitly has no signal.
+        evaluate: async (_callback: unknown, args?: unknown) =>
+          args && typeof args === "object" && "asin" in args
+            ? { kind: "none" }
+            : false, // top-level card ownership
         locator: (nestedSelector: string) =>
           nestedSelector.includes("/uff/")
             ? { count: async () => 0 }

@@ -110,6 +110,7 @@ browserTests("narrow owner-approved digital upgrade exclusion", () => {
       result = await listed(trace);
     expect(result.orders.map((o) => o.orderId)).toEqual([purchaseId]);
     expect(result.audit).toEqual({
+      flightBookingsExcluded: 0,
       digitalOrdersExcluded: 1,
       walletFundingExcluded: 0,
       unresolvedOrders: 0,
@@ -151,6 +152,7 @@ browserTests("narrow owner-approved digital upgrade exclusion", () => {
     const result = await listed();
     expect(result.orders).toHaveLength(1);
     expect(result.audit).toEqual({
+      flightBookingsExcluded: 0,
       digitalOrdersExcluded: 1,
       walletFundingExcluded: 1,
       unresolvedOrders: 0,

@@ -557,6 +557,64 @@ without exception messages. No raw labels, DOM snapshots, balances, IDs, amounts
 paths or URLs are added by wallet events; existing private report handling is
 unchanged.
 
+### Verified flight booking exclusions (Issue #26)
+
+Owner-local investigation confirmed that the conventional merchandise details URL
+for a flight booking redirects with HTTP 302 to Amazon Pay's
+`/pay/transaction-details`. That page has no normal merchandise summary.
+`extractDetailOrderTotal` correctly rejects it with `DETAIL_ORDER_MISMATCH`;
+its URL/identity checks remain unchanged. A redirect, failed extraction, numeric
+order ID, price, travel keyword or absent item markup never authorizes a skip.
+
+`src/poc/flight-booking.ts` instead verifies the independently observed list-card
+structure before merchandise selection. The current top-level card must own one
+exact labeled identity and one matching valid date in a unique visible header.
+It must contain the public flight-service catalogue image/title pair, one matching
+non-empty description and image alt, a unique current `Booking successful`
+status, and one owned rebooking action on the exact HTTPS Amazon.in `/flights/`
+route. The description is compared only inside the browser; no itinerary,
+passenger, ticket, payment or service-title facts are returned or exported.
+
+The uniquely owned header details action must use HTTPS Amazon.in
+`/pay/transaction-details`, one matching `orderId`, the exact public routing
+values `useCase=boson_flights` and `ingress=BOSON_ORDER_HISTORY`, and a bounded
+non-empty opaque route token. Duplicate/alias identity parameters, other hosts,
+paths, ports, credentials, fragments and unknown query fields reject proof.
+The classifier never opens the transaction or rebooking page. Product/image,
+status, header and action ownership, visibility, DOM bounds and complete item
+accounting must all agree, including revalidation around the header read. Direct
+evidence text is bounded separately from ignored inert script/style metadata. Missing, hidden, historical, extra or conflicting
+candidate evidence raises `LIST_FLIGHT_UNVERIFIED` and stops publication.
+Primary and secondary booking-status roles must independently belong to the same
+card and delivery box, outside the header and product region. A separately owned
+non-success declaration (such as `Booking cancelled` or `Booking pending`)
+rejects proof even when the primary still says `Booking successful`. Hidden,
+accessibility-hidden or historical contradictory declarations are conservative
+blockers, not discarded evidence. Status matching does not inspect itinerary or
+product descriptions; ordinary secondary confirmation and travel wording remain
+valid. The existing second read also checks status consistency again.
+
+Other booking states, services and changed layouts remain unsupported.
+
+Verified bookings consume no merchandise slot or order/line index. Pagination
+duplicates are revalidated against classification, date, header total and opaque
+route consistency and counted once; contradictions fail. Outside-window cards
+are date-accounted without incrementing exclusions. In-window/newer excluded-only
+pages continue pagination. As with existing service exclusions, booking dates do
+not trigger the merchandise date cutoff; that boundary remains driven by listed
+merchandise. The order and page ceilings remain unchanged. Internal
+`flightBookingsExcluded` and count-only `LIST_FLIGHT_BOOKING_EXCLUDED` events do
+not enter merchandise JSON. Wallet funding, Alexa+, normal/Now merchandise,
+cancellation, reconciliation and atomic publication retain their contracts.
+
+Recovery requires a separate reviewed change when the verified structure changes;
+do not widen a selector or turn a failed detail read into exclusion. This source
+correction does not deploy itself. Any live export, synchronization, stable-branch
+update or scheduler operation needs separate owner approval. Synthetic offline
+fixtures contain invented records and structure, never copied authenticated HTML.
+Owner-local inspection of one observed booking is not full-window live export
+validation; all personal evidence stays outside Git and shared logs.
+
 ### Audited free Alexa+ digital upgrade (Issue #22)
 
 List discovery recognizes canonical `D01-NNNNNNN-NNNNNNN` identifiers as well as
@@ -595,7 +653,8 @@ There is no generalized digital purchase adapter or change to the merchandise
 JSON contract, Amazon Now parsing, wallet proof, reconciliation or atomic output.
 
 The internal list result's aggregate `audit` reports `digitalOrdersExcluded`,
-`walletFundingExcluded` and `unresolvedOrders`. These counters are available to the
+`walletFundingExcluded`, `flightBookingsExcluded` and `unresolvedOrders`. These
+counters are available to the
 owner-private monthly coverage audit and are not added to merchandise JSON.
 `LIST_DIGITAL_UPGRADE_EXCLUDED` counts unique verified exclusions; the first
 unresolved card emits `LIST_ORDER_UNRESOLVED` with count 1 before failure.

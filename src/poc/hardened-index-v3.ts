@@ -20,6 +20,7 @@ import { recordWalletCardDiagnostic } from "./wallet-card-diagnostics";
 import { classifyWalletFundingCard } from "./wallet-card-classification";
 import { listedOrderId } from "./order-identifiers";
 import { verifyDigitalUpgrade } from "./digital-upgrade";
+import { verifyFlightBookingCard } from "./flight-booking";
 
 const REGION = "in";
 const DOMAIN = "amazon.in";
@@ -350,7 +351,14 @@ function directHeader(orderId: string): OrderHeader {
   };
 }
 
-type ListedCardKind = { funding: boolean; digital?: "excluded" | "outside-window"; date: number; amount?: number };
+type ListedCardKind = {
+  funding: boolean;
+  digital?: "excluded" | "outside-window";
+  flight?: "excluded" | "outside-window";
+  flightRoute?: string;
+  date: number;
+  amount?: number;
+};
 
 interface OrderPageSelection {
   startKey: number;
@@ -466,6 +474,55 @@ async function readCurrentOrderPage(
       unresolved();
     }
     dates.push(orderDateKey);
+    const previousFlight = cardKinds.get(orderId);
+    let flight: Awaited<ReturnType<typeof verifyFlightBookingCard>>;
+    try {
+      flight = await verifyFlightBookingCard(
+        card, orderId, keyToIso(orderDateKey), ORDER_CARD_SELECTOR,
+      );
+      if (flight) {
+        const total = await extractHeaderOrderTotal(card);
+        const refreshed = await verifyFlightBookingCard(
+          card, orderId, keyToIso(orderDateKey), ORDER_CARD_SELECTOR,
+        );
+        const freshTotal = await extractHeaderOrderTotal(card);
+        if (!total || !freshTotal || !refreshed ||
+            refreshed.routingKey !== flight.routingKey ||
+            total.currency !== freshTotal.currency ||
+            Math.round(total.amount * 100) !== Math.round(freshTotal.amount * 100))
+          throw new DiagnosticError(
+            "list", "LIST_FLIGHT_UNVERIFIED",
+            "Flight booking proof changed or is unavailable.",
+          );
+        const amount = Math.round(total.amount * 100);
+        if (known.has(orderId) || (previousFlight &&
+            (!previousFlight.flight || previousFlight.date !== orderDateKey ||
+             previousFlight.amount !== amount ||
+             previousFlight.flightRoute !== flight.routingKey)))
+          throw new DiagnosticError(
+            "list", "LIST_DUPLICATE_CONFLICT", "Flight booking cards conflict.",
+          );
+        const inWindow = !selection ||
+          (orderDateKey >= selection.startKey && orderDateKey <= selection.endKey);
+        cardKinds.set(orderId, {
+          funding: false, flight: inWindow ? "excluded" : "outside-window",
+          flightRoute: flight.routingKey, date: orderDateKey, amount,
+        });
+        if (!previousFlight && inWindow)
+          diagnostics?.listAudit(
+            "LIST_FLIGHT_BOOKING_EXCLUDED",
+            [...cardKinds.values()].filter(kind => kind.flight === "excluded").length,
+          );
+        continue;
+      }
+      if (previousFlight?.flight)
+        throw new DiagnosticError(
+          "list", "LIST_DUPLICATE_CONFLICT", "Flight booking classification changed.",
+        );
+    } catch (error) {
+      diagnostics?.listAudit("LIST_ORDER_UNRESOLVED", 1);
+      throw error;
+    }
     if (orderId.startsWith("D01-")) {
       const previous = cardKinds.get(orderId);
       if (
@@ -729,6 +786,7 @@ export async function listOrders(
   return {
     pagesScanned,
     audit: {
+      flightBookingsExcluded: [...cardKinds.values()].filter(kind => kind.flight === "excluded").length,
       digitalOrdersExcluded: [...cardKinds.values()].filter(kind => kind.digital === "excluded").length,
       walletFundingExcluded: [...cardKinds.values()].filter(kind => kind.funding).length,
       unresolvedOrders: 0,

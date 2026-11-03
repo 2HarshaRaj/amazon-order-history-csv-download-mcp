@@ -113,6 +113,24 @@ All shell scripts must follow these rules:
 - Docker-based isolated testing environment
 - Minimum 80% code coverage target
 
+### Hardened Amazon.in classification boundary
+
+The scheduled JSON path is developed from `poc/harden-amazon-orders`. Keep its
+merchandise detail identity/total checks fail-closed. An unexpected details URL,
+redirect or extraction error is never proof that an order is non-merchandise.
+List-stage exclusions require independent current owning-card identity/date and
+the complete verified service-specific structure; missing or contradictory
+candidate evidence must fail. Keep exclusions outside merchandise limits and
+JSON, and account for unique exclusions and dates across pagination. Internal
+flight route tokens are memory-only consistency checks, never diagnostic facts.
+
+Use invented offline fixtures, not saved account HTML, for regression tests.
+Itinerary text, passenger/ticket/payment data and actual order identities must
+never reach source, Issues, PRs or shared logs. Authorized owner-local inspection
+must avoid competing with the scheduled runner/profile; source implementation
+and read-only diagnosis do not authorize live exports, synchronization, scheduler
+changes or deployment. See the README classification policies and limitations.
+
 ## File Structure
 
 ```
