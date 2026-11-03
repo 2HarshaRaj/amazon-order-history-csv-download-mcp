@@ -104,6 +104,8 @@ const reasonCodeSchema = z.enum([
   "LIST_DIGITAL_UPGRADE_EXCLUDED",
   "LIST_ORDER_UNRESOLVED",
   "LIST_DIGITAL_UNVERIFIED",
+  "LIST_FLIGHT_BOOKING_EXCLUDED",
+  "LIST_FLIGHT_UNVERIFIED",
   "DATE_RANGE_UNSUPPORTED",
   "DETAIL_NAVIGATION_FAILED",
   "DETAIL_SELECTOR_MISSING",
@@ -660,7 +662,10 @@ export class FailureDiagnostics {
     // Excluded funding records have no merchandise-order index or facts.
     this.events[this.events.length - 1].orderIndex = undefined;
   }
-  listAudit(reason: "LIST_DIGITAL_UPGRADE_EXCLUDED" | "LIST_ORDER_UNRESOLVED", count: number): void {
+  listAudit(
+    reason: "LIST_DIGITAL_UPGRADE_EXCLUDED" | "LIST_FLIGHT_BOOKING_EXCLUDED" | "LIST_ORDER_UNRESOLVED",
+    count: number,
+  ): void {
     if (!Number.isSafeInteger(count) || count < 1) return;
     this.note("list", reason, count);
     this.events[this.events.length - 1].orderIndex = undefined;
