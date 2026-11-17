@@ -1631,7 +1631,7 @@ async function readNowDom(
           return increasingRange(pieces[2], pieces[3]);
         };
         const packageDescriptor = (value: string): boolean => {
-          if (value === "1 Pc") return true;
+          if (value === "1 Pc" || value === "1 Unit") return true;
           if (packageSize.test(value) || pieceDescriptor(value)) return true;
           const range =
             /^([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*)-([1-9]\d*(?:\.\d+)?|0\.\d*[1-9]\d*) g$/.exec(
@@ -1720,7 +1720,24 @@ async function readNowDom(
               const separator = nextField(index + 1);
               const declaration = nextField(separator + 1);
               const units = fieldText(children[declaration]);
+              // Exact observed package layout only: P text / SPAN period / text.
+              // Case distinguishes package metadata here, never in the parser.
+              // Bare, joined or independently wrapped Unit declarations remain
+              // quantity signals and cannot be discarded as package metadata.
+              const unitPackage =
+                part !== "1 Unit" ||
+                (el.tagName === "P" &&
+                  children.length === 3 &&
+                  index === 0 &&
+                  node.nodeType === 3 &&
+                  declaration === 2 &&
+                  children[separator].nodeType === 1 &&
+                  (children[separator] as Element).tagName === "SPAN" &&
+                  (children[separator] as Element).children.length === 0 &&
+                  children[declaration].nodeType === 3 &&
+                  /^[1-9]\d* unit(?:s|\(s\))?$/.test(units));
               if (
+                unitPackage &&
                 (fieldText(children[separator]) === "." ||
                   (pieceDescriptor(part) &&
                     fieldText(children[separator]) === "·")) &&

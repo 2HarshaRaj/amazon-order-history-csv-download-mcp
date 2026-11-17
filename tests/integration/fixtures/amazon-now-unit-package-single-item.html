@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8">
+<!-- Entirely fictional single-item order; no account HTML or customer facts. -->
+<style>img {width:20px;height:20px} [decorationtype=strike] {text-decoration:line-through}</style>
+<main><div><div><b>Order ID</b><span>111-2222222-3333333</span></div><button id="details" onclick="document.querySelector('#sheet').hidden=false">View details</button></div></main>
+<section role="dialog" id="sheet" hidden>
+<h1>Order Details</h1><div><b>Order ID</b><span>111-2222222-3333333</span></div>
+<div id="fulfilled"><p id="count">1 item in order</p>
+<div id="single-item"><span><img alt="B0SOLO0001" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="></span><div><p>Invented single-item groceries</p><p id="package">1 Unit<span> . </span>1 unit</p></div><div><p id="current-price" aria-label="₹17"><span aria-hidden="true">₹</span><span aria-hidden="true">17</span></p><p id="historical-price" decorationtype="strike">₹29</p></div></div>
+</div>
+<div id="bill"><p>Bill summary</p><div>
+<div id="subtotal"><div><p>Items total</p></div><div><p>₹17</p></div></div>
+<div><div><p>Handling fee</p></div><div><p>Free</p></div></div>
+<div><div><p>Delivery fee</p></div><div><p>Free</p></div></div>
+<div id="you-pay"><div><div><p>You pay</p></div><p>Inclusive of taxes</p></div><div><p>₹17</p></div></div>
+</div></div>
+</section>
