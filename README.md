@@ -177,6 +177,15 @@ current descriptor/period/explicit-purchased-unit structure. It supplies neither
 a second product name nor a purchased quantity. Other spellings, hidden or
 historical fragments, extra controls and ambiguous ownership remain rejected.
 
+The case-sensitive package descriptor `1 Unit` is supported only as a current
+`<p>` with exactly three child nodes: package text, a childless `<span>`
+containing the literal period `.`, and a lowercase explicit purchased-unit text
+declaration. Only the last text supplies quantity. Joined text, wrapped declarations,
+other separators or package spellings, and duplicate/conflicting purchased
+quantities remain rejected. The pure snapshot parser still rejects unproven
+package fragments. Historical prices, source ownership, identity, bill checks
+and the JSON contract retain their existing behavior.
+
 ### Verified Amazon Now line totals without a known unit price
 
 A multi-line, selected-order purchase can contain a multi-unit row with one
