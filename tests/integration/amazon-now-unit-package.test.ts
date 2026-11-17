@@ -30,7 +30,11 @@ const mutate = (code: string): string =>
 browserTests(
   "Amazon Now exact Unit package ownership (fictional offline HTML)",
   () => {
-    let browser: Browser, context: BrowserContext, page: Page, html: string;
+    let browser: Browser,
+      context: BrowserContext,
+      page: Page,
+      html: string,
+      listHtml: string;
     beforeAll(async () => {
       browser = await chromium.launch({
         executablePath: executable,
@@ -42,6 +46,7 @@ browserTests(
     });
     beforeEach(async () => {
       html = fixture;
+      listHtml = list;
       context = await browser.newContext({
         offline: true,
         serviceWorkers: "block",
@@ -53,7 +58,7 @@ browserTests(
           body: url.pathname.startsWith("/uff/")
             ? `<script>location.replace(${JSON.stringify(tracking)})</script>`
             : url.pathname === "/your-orders/orders"
-              ? list
+              ? listHtml
               : html,
         });
       });
@@ -97,6 +102,116 @@ browserTests(
         expect(JSON.stringify(detail)).not.toMatch(/1 Unit|₹24|B0REC00003/);
       },
     );
+    test("single-item Unit package reconciles current price and exports atomically with strict validation", async () => {
+      const single = readFileSync(
+        join(__dirname, "fixtures/amazon-now-unit-package-single-item.html"),
+        "utf8",
+      );
+      html = single;
+      listHtml = list.replace("₹31.00", "₹17.00");
+      const trace = new FailureDiagnostics();
+      const parserFailure = jest.spyOn(trace, "nowParserFailure");
+      const detail = await extractNowOrder(
+        page,
+        id,
+        outer,
+        async () => {},
+        trace,
+        { amount: 17, currency: "INR" },
+      );
+      expect(await page.locator("#count").textContent()).toBe(
+        "1 item in order",
+      );
+      expect(detail.itemCount).toBe(1);
+      expect(detail.items).toHaveLength(1);
+      expect(detail.items.reduce((sum, item) => sum + item.quantity, 0)).toBe(
+        1,
+      );
+      expect(detail.items[0]).toMatchObject({
+        asin: "B0SOLO0001",
+        quantity: 1,
+        unitPrice: { amount: 17, currency: "INR" },
+        itemTotal: { amount: 17, currency: "INR" },
+      });
+      expect(await page.locator("#historical-price").textContent()).toBe("₹29");
+      expect(
+        await page
+          .locator("#historical-price")
+          .evaluate((el) => getComputedStyle(el).textDecorationLine),
+      ).toContain("line-through");
+      expect(detail.orderTotal.amount).toBe(17);
+      expect(detail.orderTotalSource).toBe("amazon-now-you-pay");
+      expect(detail.adjustments).toEqual([]);
+      expect(parserFailure).not.toHaveBeenCalled();
+      expect(JSON.stringify(detail)).not.toMatch(/1 Unit|₹29|Derived/);
+
+      jest
+        .spyOn(chromium, "launchPersistentContext")
+        .mockResolvedValue(context);
+      const directory = await makeTestDirectory(
+        "synthetic-single-unit-package-",
+      );
+      const output = join(directory, "orders.json");
+      const exportFixture = (): Promise<void> =>
+        runExport(
+          {
+            startDate: "2026-10-01",
+            endDate: "2026-10-02",
+            maxOrders: 5,
+            output,
+          },
+          () => {},
+          {
+            list: listOrders,
+            extract: extractOrderItems,
+            write: validateAndWriteExport,
+            report: async () => {},
+            cleanup: async () => {},
+          },
+        );
+      await writeFile(output, "prior complete export");
+      try {
+        await exportFixture();
+        const published = await readFile(output, "utf8");
+        const saved = JSON.parse(published);
+        expect(saved.orders).toHaveLength(1);
+        expect(saved.orders[0]).toMatchObject({
+          orderTotal: 17,
+          adjustments: [],
+        });
+        expect(saved.orders[0].items).toEqual([
+          expect.objectContaining({
+            lineIndex: 0,
+            asin: "B0SOLO0001",
+            quantity: 1,
+            unitPrice: 17,
+            itemTotal: 17,
+            currency: "INR",
+          }),
+        ]);
+        expect(published).not.toMatch(
+          /1 Unit|₹29|Derived|singleLinePriceDomVerified|verifiedLineTotal/,
+        );
+        // Every invalid read must preserve the complete single-item publication.
+        for (const change of [
+          "document.querySelector('#single-item>div').insertAdjacentHTML('beforeend','<p>Qty: 1</p>')",
+          "document.querySelector('#single-item>div').insertAdjacentHTML('beforeend','<p>Qty: 2</p>')",
+          "document.querySelector('#count').textContent='2 items in order'",
+          "document.querySelector('#subtotal>div:last-child>p').textContent='₹18'",
+          "document.querySelector('#you-pay>div:last-child>p').textContent='₹18'",
+        ]) {
+          html =
+            single +
+            `<script>${change};document.currentScript.remove()</script>`;
+          await expect(exportFixture()).rejects.toMatchObject({
+            category: "validation",
+          });
+          expect(await readFile(output, "utf8")).toBe(published);
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
     test("ordinary details retains the existing 23-row historical-price behavior", async () => {
       const ordinary = readFileSync(
         join(__dirname, "fixtures/amazon-now-a11y-prices.html"),
